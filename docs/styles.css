@@ -13,6 +13,7 @@
   }
 }
 *{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
 html{-webkit-text-size-adjust:100%}
 body{
   background:var(--bg);color:var(--text);
@@ -104,6 +105,7 @@ tr:last-child td{border-bottom:none}
 
 /* ---------- calculator ---------- */
 .calc-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px}
+.calc-grid.three{grid-template-columns:repeat(3,1fr);gap:8px}
 .calc-grid label{font-size:11px;color:var(--muted);display:block;margin-bottom:3px}
 .calc-grid input{
   width:100%;background:var(--card2);border:1px solid var(--border);color:var(--text);

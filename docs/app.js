@@ -269,32 +269,49 @@ function renderCalcMaybe() {
   $("#calc-area").innerHTML = `
   <div class="card">
     <div class="card-title">該下多少？<span class="hint">先決定敢虧多少，其他系統幫你算</span></div>
-    <div class="calc-grid">
-      <div><label>帳戶本金（USDT）</label><input id="calc-eq" type="number" inputmode="decimal" value="${savedEq}"></div>
-      <div><label>這筆敢虧 %（建議 ${plan.risk_pct}%）</label><input id="calc-risk" type="number" inputmode="decimal" step="0.1" value="${plan.risk_pct}"></div>
+    <div class="calc-grid three">
+      <div><label>帳戶本金 USDT</label><input id="calc-eq" type="number" inputmode="decimal" value="${savedEq}"></div>
+      <div><label>這筆敢虧 %（建議 ${plan.risk_pct}）</label><input id="calc-risk" type="number" inputmode="decimal" step="0.1" value="${plan.risk_pct}"></div>
+      <div><label>槓桿倍數（建議 ${plan.leverage}）</label><input id="calc-lev" type="number" inputmode="decimal" step="0.5" min="1" max="50" value="${plan.leverage}"></div>
     </div>
     <div class="calc-out" id="calc-out"></div>
+    <div id="calc-liq-warn" class="hint-block"></div>
     <div class="countdown" id="calc-note"></div>
   </div>`;
   const recompute = () => {
     const eq = +$("#calc-eq").value || 0, risk = +$("#calc-risk").value || 0;
+    const lev = Math.min(50, Math.max(1, +$("#calc-lev").value || plan.leverage));
     localStorage.setItem("eq", eq);
+    const sgn = plan.direction === "LONG" ? 1 : -1;
     const riskUsd = eq * risk / 100;
     const notional = riskUsd / (plan.stop_pct / 100);
-    const margin = notional / plan.leverage;
+    const margin = notional / lev;
     const qty = notional / plan.avg_entry;
+    // 逐倉強平價估算（維持保證金 ~0.6%）與停損距離比
+    const liq = plan.avg_entry * (1 - sgn * (1 / lev - 0.006));
+    const ratio = Math.abs(plan.avg_entry - liq) / Math.abs(plan.avg_entry - plan.stop);
+    let liqCls = "up", liqTxt = "比停損遠 ✓", warn = "✅ 安全：就算插針到停損，也還碰不到強平價。";
+    if (ratio < 1.0) {
+      liqCls = "down"; liqTxt = "比停損還近 ⛔";
+      warn = "⛔ 危險：這個槓桿下「強平價」比你的停損還近——行情還沒走到停損就先被強平，" +
+        "計畫中的小虧會變成保證金全部歸零。請把槓桿降到安全區。";
+    } else if (ratio < 1.3) {
+      liqCls = ""; liqTxt = "貼近停損 ⚠";
+      warn = "⚠ 偏險：強平價離停損太近，插針或滑價可能先掃到強平。建議再降一點槓桿。";
+    }
     $("#calc-out").innerHTML = `
       <div class="cell"><b class="down">${fmt(riskUsd, 0)}</b><span>最多虧 USDT<br>(碰停損時)</span></div>
       <div class="cell"><b>${fmt(notional, 0)}</b><span>倉位總值 USDT</span></div>
       <div class="cell"><b>${qty.toFixed(4)}</b><span>總數量 BTC</span></div>
-      <div class="cell"><b>${plan.leverage}x</b><span>建議槓桿</span></div>
+      <div class="cell"><b>${lev}x</b><span>你選的槓桿</span></div>
       <div class="cell"><b>${fmt(margin, 0)}</b><span>需要保證金</span></div>
-      <div class="cell"><b>${fmt(plan.liq_est)}</b><span>估計強平價<br>(比停損更遠✓)</span></div>`;
+      <div class="cell"><b class="${liqCls}">${fmt(liq)}</b><span>估計強平價<br>(${liqTxt})</span></div>`;
+    $("#calc-liq-warn").textContent = warn +
+      "（提醒：改槓桿不會改變倉位大小與賺賠，只改變鎖住的保證金和強平價）";
     $("#calc-note").textContent =
       `逐檔下單量：${plan.entries.map((e, i) => `第${i + 1}檔 ${(qty * e.w).toFixed(4)} BTC`).join("、")}（逐倉模式估算）`;
   };
-  $("#calc-eq").addEventListener("input", recompute);
-  $("#calc-risk").addEventListener("input", recompute);
+  ["calc-eq", "calc-risk", "calc-lev"].forEach(id => $("#" + id).addEventListener("input", recompute));
   recompute();
 }
 

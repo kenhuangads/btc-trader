@@ -1,5 +1,5 @@
 /* PWA service worker：殼層快取＋資料網路優先（離線時退回快取） */
-const VER = "btc-trader-v2";
+const VER = "btc-trader-v3";
 const SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", e => {
