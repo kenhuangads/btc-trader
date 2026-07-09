@@ -2,7 +2,9 @@ name: daily-update
 
 on:
   schedule:
-    - cron: "7 0 * * *"   # 每日 00:07 UTC（台北 08:07）＝ BTC 日K收盤後
+    # 00:07 UTC（台北 08:07）＝ 日K收盤後產生當日訊號；
+    # 其餘每 4 小時（4H K 收盤後）僅追蹤在途單狀態（訊號不變，冪等）
+    - cron: "7 0,4,8,12,16,20 * * *"
   workflow_dispatch:
     inputs:
       bootstrap:

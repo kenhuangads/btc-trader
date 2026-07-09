@@ -36,6 +36,23 @@ def condensed_trade(tr: dict) -> dict:
             "stop_now": tr["stop_now"]}
 
 
+def make_headline(res: dict) -> str:
+    """給新手看的一句白話結論。"""
+    d = res["direction"]
+    gates = " ".join(res["gates"])
+    if d == "LONG":
+        return "偏多佈局：在下方掛限價單等回檔便宜接，跌破停損就認錯出場"
+    if d == "SHORT":
+        return "偏空佈局：在上方掛限價單等反彈再空，突破停損就認錯出場"
+    if "冷卻" in gates:
+        return "連續虧損冷卻中：今天強制休息一天，防止報復性交易"
+    if "重大事件" in gates:
+        return "重大財經事件將至：先觀望，等數據公布、市場消化後再進場"
+    if "逆勢" in gates:
+        return "趨勢太強不逆勢接刀：等反轉結構成形再出手"
+    return "今天不出手：多空力量互相抵銷，寧可錯過、不可做錯"
+
+
 def main() -> int:
     bootstrap_flag = "--bootstrap" in sys.argv
     state = jload(STATE / "model_state.json") or copy.deepcopy(OPT.DEFAULT_STATE)
@@ -134,6 +151,7 @@ def main() -> int:
                   "funding": (float(D["funding"].iloc[t]) if not np.isnan(D["funding"].iloc[t]) else None),
                   "oi": (float(D["oi"].iloc[t]) if not np.isnan(D["oi"].iloc[t]) else None)},
         "signal": {"direction": res["direction"], "score": sig["score"],
+                   "headline": make_headline(res),
                    "confidence": sig["confidence"], "agree": sig["agree"],
                    "factors": [{**f, "weight": state["weights"].get(f["name"], 1.0)} for f in sig["factors"]],
                    "gates": res["gates"], "watch": res["watch"], "plan": plan,

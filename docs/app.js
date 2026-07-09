@@ -1,4 +1,4 @@
-/* BTC 波段訊號儀表板（純前端，資料由 GitHub Actions 每日產出的 JSON 提供） */
+/* BTC 波段訊號儀表板（純前端，資料由 GitHub Actions 產出的 JSON 提供） */
 "use strict";
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -8,7 +8,26 @@ const pct = (x, d = 0) => x == null ? "—" : (x * 100).toFixed(d) + "%";
 const DIR = { LONG: "做多", SHORT: "做空", FLAT: "觀望" };
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-let LATEST = null, REVIEW = null, OPT = null, MODE = "all";
+const FNAMES = {
+  trend_daily: "📈 大趨勢(日線)", trend_4h: "🕐 短趨勢(4H)", momentum: "⚡ 動能",
+  funding: "💰 多空擁擠度", oi_price: "🏦 大戶資金(OI)", taker_flow: "🌊 買賣力道",
+  rvol: "📊 量能", wick_magnet: "🕯️ 影線磁吸", levels: "🧱 關鍵價位", squeeze_setup: "🔥 軋空醞釀",
+};
+const FGLOSS = {
+  trend_daily: "中長期方向。均線向上排列＝多頭市場，順著做勝率高。",
+  trend_4h: "幾天內的小趨勢，與大趨勢同向時進場品質較好。",
+  momentum: "漲跌的速度感（RSI/MACD）。衝太快容易回調。",
+  funding: "做多的人太多→費率飆高＝擁擠＝危險；反過來就是軋空燃料。",
+  oi_price: "市場資金進出。上漲＋資金流入＝健康；上漲但資金撤退＝虛漲。",
+  taker_flow: "主動買單和主動賣單誰比較兇。價漲但買盤轉弱＝背離警訊。",
+  rvol: "今天成交量比平常大多少。沒有量的突破常是假突破。",
+  wick_magnet: "長影線＝插針痕跡，市場常會回頭「補」那個價位，像磁鐵。",
+  levels: "整數關卡、前高前低——大家都盯著的價位，容易有反應。",
+  squeeze_setup: "一邊人擠爆又被大戶吸收→可能瞬間往反方向噴出。",
+};
+
+let LATEST = null, REVIEW = null, OPT = null, MODE = "all", LIVE_PRICE = null;
+let LADDER = null, CHARTX = null;
 
 /* ---------------- 啟動 ---------------- */
 async function boot() {
@@ -26,102 +45,233 @@ async function boot() {
   }
   renderHeader(); renderToday(); renderReview(); renderSystem();
   livePriceLoop(); setInterval(tickCountdown, 1000);
-  window.addEventListener("resize", debounce(() => { renderChart(); renderEquity(); renderTouch(); }, 200));
+  window.addEventListener("resize", debounce(() => { renderChart(); renderLadder(); renderEquity(); renderRBars(); renderTouch(); }, 200));
+  if (!localStorage.getItem("onboarded")) openModal();
 }
-
 function debounce(fn, ms) { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; }
 
-/* ---------------- Header ---------------- */
+/* ---------------- Header / Modal ---------------- */
 function renderHeader() {
   const age = Date.now() - LATEST.generated_at;
-  $("#data-time").textContent = `資料：${LATEST.generated_taipei}（台北）· 每日 08:07 後自動更新`;
+  $("#data-time").textContent = `更新：${LATEST.generated_taipei}（訊號每日 08:07 · 持倉追蹤每 4 小時）`;
   if (LATEST.stale || age > 30 * 3600e3) $("#stale-badge").hidden = false;
   $("#live-price").textContent = fmt(LATEST.price.close);
 }
+function openModal() { $("#modal").hidden = false; document.body.style.overflow = "hidden"; }
+function closeModal() { $("#modal").hidden = true; document.body.style.overflow = ""; localStorage.setItem("onboarded", "1"); }
+$("#help-btn").addEventListener("click", openModal);
+$("#modal-close").addEventListener("click", closeModal);
+$("#modal").addEventListener("click", e => { if (e.target === $("#modal")) closeModal(); });
 
 /* ---------------- 今日 ---------------- */
 function renderToday() {
-  const S = LATEST.signal, plan = S.plan;
-  // 總經事件
+  const S = LATEST.signal;
   const evs = (S.macro?.events || []).filter(e => e.hours_until >= 0);
   $("#macro-strip").innerHTML = evs.length
-    ? `<div class="card" style="padding:10px 14px"><span class="badge badge-amber">⚠ 重大事件</span>
+    ? `<div class="card" style="padding:10px 14px"><span class="badge badge-amber">⚠ 大事件</span>
        <span style="font-size:13px;margin-left:6px">${evs.map(e => `${esc(e.name)} ${e.date}（${Math.round(e.hours_until)}h 後）`).join("、")}
-       <span class="hint">事件前 48h 降槓桿、24h 內不開新倉</span></span></div>` : "";
+       <span class="hint">公布前後波動大，系統自動降風險</span></span></div>` : "";
+  renderHero(); renderTug(); renderLadder(); renderCalcMaybe(); renderChart(); renderFactors(); renderDiscipline();
+}
 
-  // Hero
+function renderHero() {
+  const S = LATEST.signal;
   const cls = S.direction === "LONG" ? "long" : S.direction === "SHORT" ? "short" : "flat";
   let notes = "";
   if (S.gates?.length) notes += S.gates.map(g => `<li class="gate">${esc(g)}</li>`).join("");
   if (S.direction === "FLAT" && S.watch?.length) notes += S.watch.map(w => `<li>${esc(w)}</li>`).join("");
   if (S.position_note) notes += `<li class="gate">${esc(S.position_note)}</li>`;
+  const floor = LATEST.meta.params.confidence_floor;
   $("#hero").className = `card hero ${cls}`;
   $("#hero").innerHTML = `
-    <div class="hero-top">
-      <div>
-        <div class="dir-badge ${cls}">${DIR[S.direction]}</div>
-        <div style="font-size:12px;color:var(--muted)">綜合分數 <b>${S.score > 0 ? "+" : ""}${S.score}</b> ·
-          因子同向率 ${pct(S.agree)}</div>
-      </div>
-      <div class="hero-date">訊號日 ${LATEST.signal_date}<br>收盤 ${fmt(LATEST.price.close)}
-        <span class="${LATEST.price.chg_1d >= 0 ? "up" : "down"}">${LATEST.price.chg_1d > 0 ? "+" : ""}${LATEST.price.chg_1d}%</span></div>
-    </div>
+    <div class="gauge-wrap">${gaugeSVG(S.score, LATEST.meta.params.score_threshold, S.direction)}</div>
+    <div class="headline">${esc(S.headline || "")}</div>
+    <div class="hero-sub">訊號日 ${LATEST.signal_date} · 收盤 ${fmt(LATEST.price.close)}
+      <span class="${LATEST.price.chg_1d >= 0 ? "up" : "down"}">${LATEST.price.chg_1d > 0 ? "+" : ""}${LATEST.price.chg_1d}%</span></div>
     <div class="conf-row">
-      <span style="font-size:12px;color:var(--muted)">信心</span>
-      <div class="meter"><i style="width:${S.confidence}%"></i></div>
-      <span class="conf-num">${S.confidence}</span>
+      <span style="font-size:12px;color:var(--muted)">把握度</span>
+      <div class="meter"><i style="width:${S.confidence}%"></i><span class="gate-tick" style="left:${floor}%"></span></div>
+      <span class="conf-num">${S.confidence}<span style="font-size:11px;color:var(--muted)">/100</span></span>
     </div>
+    <div class="hero-sub" style="margin-top:4px">把握度需超過刻度線 ${floor} 才會出手</div>
     ${notes ? `<ul class="hero-notes">${notes}</ul>` : ""}`;
+}
 
-  // 交易計畫
-  if (plan) {
-    const sgn = plan.direction === "LONG" ? 1 : -1;
-    const rows = plan.entries.map(e => `
-      <tr><td><b>第 ${e.i + 1} 檔</b><div class="prob-txt">${esc(e.tag)}</div></td>
-        <td class="num"><b>${fmt(e.price)}</b></td>
-        <td class="num">${Math.round(e.w * 100)}%</td>
-        <td><div class="prob-bar"><i style="width:${(e.prob || 0) * 100}%"></i></div>
-            <div class="prob-txt">${e.prob != null ? pct(e.prob) : "—"} 成交率</div></td></tr>`).join("");
-    const tps = plan.tps.map(t => `
-      <div class="kv"><span>🎯 ${t.name}（+${t.r}R）</span><b>${fmt(t.price)} <span class="hint">${esc(t.action)}</span></b></div>`).join("");
-    const tg = (plan.targets || []).map(t => `<span class="pill">${fmt(t.price)}<br><span class="hint">${esc(t.why)}</span></span>`).join("");
-    $("#plan-area").innerHTML = `
-    <div class="card">
-      <div class="card-title">進場掛單梯（限價 · 有效 48h）<span id="cd-validity" class="hint"></span></div>
-      <table><thead><tr><th>檔位</th><th class="num">價格</th><th class="num">比重</th><th style="width:76px">歷史成交率</th></tr></thead>
-      <tbody>${rows}</tbody></table>
-      <div class="kv" style="margin-top:6px"><span>加權均價（全數成交）</span><b>${fmt(plan.avg_entry)}</b></div>
-      <div class="kv"><span>🛑 停損（結構外 + ${LATEST.meta.params.stop_buffer_atr}×ATR 緩衝）</span>
-        <b class="down">${fmt(plan.stop)}（-${plan.stop_pct}%）</b></div>
-      ${tps}
-      <div class="kv"><span>🏃 移動停損</span><b style="font-size:12.5px;font-weight:500">${esc(plan.trail_txt)}</b></div>
-      ${tg ? `<div style="font-size:12px;color:var(--muted);margin-top:8px">磁吸參考目標</div><div class="pill-row">${tg}</div>` : ""}
-      ${plan.warnings?.length ? `<div class="warn">⚠ ${plan.warnings.map(esc).join("；")}</div>` : ""}
-      <div class="scen">
-        <p class="main"><b>主劇本</b>：${esc(plan.scenarios.main)}</p>
-        <p class="alt"><b>備援</b>：${esc(plan.scenarios.alt)}</p>
-        <p class="invalid"><b>失效條件</b>：${esc(plan.scenarios.invalid)}</p>
-      </div>
-      <div class="countdown" id="cd-deadline"></div>
+function gaugeSVG(score, th, dir) {
+  const W = 340, H = 175, cx = 170, cy = 150, R = 118;
+  const green = css("--green"), red = css("--red"), muted = css("--muted"), card2 = css("--card2");
+  const pt = (s, r) => {
+    const a = (180 - (s + 100) * 0.9) * Math.PI / 180;
+    return [cx + r * Math.cos(a), cy - r * Math.sin(a)];
+  };
+  const arc = (s1, s2, col, w) => {
+    const [x1, y1] = pt(s1, R), [x2, y2] = pt(s2, R);
+    return `<path d="M${x1.toFixed(1)},${y1.toFixed(1)} A${R},${R} 0 0 1 ${x2.toFixed(1)},${y2.toFixed(1)}"
+      fill="none" stroke="${col}" stroke-width="${w}" stroke-linecap="butt"/>`;
+  };
+  let s = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
+  s += arc(-100, -th, red, 20) + arc(-th, th, card2, 20) + arc(th, 100, green, 20);
+  // 門檻刻度
+  [-th, th].forEach(t => {
+    const [x1, y1] = pt(t, R + 13), [x2, y2] = pt(t, R - 13);
+    s += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${muted}" stroke-width="1.6"/>`;
+  });
+  // 區域標籤
+  const [lx, ly] = pt(-72, R + 26), [rx, ry] = pt(72, R + 26), [mx, my] = pt(0, R + 24);
+  s += `<text x="${lx}" y="${ly}" font-size="12" fill="${red}" text-anchor="middle" font-weight="700">看空</text>`;
+  s += `<text x="${mx}" y="${my}" font-size="12" fill="${muted}" text-anchor="middle">休息</text>`;
+  s += `<text x="${rx}" y="${ry}" font-size="12" fill="${green}" text-anchor="middle" font-weight="700">看多</text>`;
+  // 指針
+  const sc = Math.max(-100, Math.min(100, score));
+  const [nx, ny] = pt(sc, R - 30);
+  const ncol = dir === "LONG" ? green : dir === "SHORT" ? red : muted;
+  s += `<line x1="${cx}" y1="${cy}" x2="${nx}" y2="${ny}" stroke="${ncol}" stroke-width="4" stroke-linecap="round"/>`;
+  s += `<circle cx="${cx}" cy="${cy}" r="7" fill="${ncol}"/>`;
+  // 大字
+  const word = DIR[dir];
+  s += `<text x="${cx}" y="${cy - 38}" font-size="30" font-weight="900" fill="${ncol}" text-anchor="middle">${word}</text>`;
+  s += `<text x="${cx}" y="${cy - 16}" font-size="12" fill="${muted}" text-anchor="middle">綜合分數 ${score > 0 ? "+" : ""}${Math.round(score)}（門檻 ±${th}）</text>`;
+  return s + "</svg>";
+}
+
+/* ---------------- 多空拔河 ---------------- */
+function renderTug() {
+  const fs = (LATEST.signal.factors || []).filter(f => f.ok);
+  let pos = 0, neg = 0, nPos = 0, nNeg = 0;
+  fs.forEach(f => {
+    const v = f.score * (f.weight || 1);
+    if (f.score >= 8) { pos += v; nPos++; }
+    else if (f.score <= -8) { neg += -v; nNeg++; }
+  });
+  const total = pos + neg || 1;
+  const pw = pos / total * 50, nw = neg / total * 50;
+  $("#tug").innerHTML = `
+    <div class="tug-bar">
+      <div class="neg" style="width:${nw}%"></div>
+      <div class="pos" style="width:${pw}%"></div>
+      <div class="mid"></div>
+    </div>
+    <div class="tug-labels">
+      <span class="down">◀ 偏空 ${Math.round(neg)}<span class="n">${nNeg} 項因子</span></span>
+      <span class="up">偏多 ${Math.round(pos)} ▶<span class="n">${nPos} 項因子</span></span>
     </div>`;
-    renderCalc(plan);
-  } else {
-    $("#plan-area").innerHTML = "";
-    $("#calc-area").innerHTML = "";
-  }
+}
 
-  renderChart(); renderFactors(); renderDiscipline();
+/* ---------------- 進出場地圖（價格梯） ---------------- */
+function renderLadder() {
+  const box = $("#ladder"); if (!box || !LATEST) return;
+  const plan = LATEST.signal.plan;
+  const W = box.clientWidth || 340;
+  const green = css("--green"), red = css("--red"), muted = css("--muted"),
+    accent = css("--accent"), border = css("--border"), text = css("--text"), card = css("--card");
+  const close = LIVE_PRICE || LATEST.price.close;
+  let rows = [], zones = [], H, title, note;
+
+  if (plan) {
+    H = 420;
+    const sgn = plan.direction === "LONG" ? 1 : -1;
+    const eWord = plan.direction === "LONG" ? "買點" : "空點";
+    title = `進出場地圖 <span class="hint">${plan.direction === "LONG" ? "做多" : "做空"}計畫 · 照著掛單即可</span>`;
+    plan.tps.slice().reverse().forEach((t, idx) => {
+      const i = plan.tps.length - idx;
+      rows.push({ p: t.price, col: green, chip: `🎯 目標${i}（+${t.r}R）`, sub: i === 1 ? "平30%＋停損移到成本" : "平30%＋啟動移動停損" });
+    });
+    plan.entries.forEach((e, i) => {
+      rows.push({ p: e.price, col: accent, chip: `🟢 ${eWord}${i + 1}（${Math.round(e.w * 100)}%資金）`, sub: e.prob != null ? `歷史成交率 ${Math.round(e.prob * 100)}%` : "" });
+    });
+    rows.push({ p: plan.stop, col: red, chip: "🛑 停損（最大虧損處）", sub: `-${plan.stop_pct}% · 碰到就全部出場` });
+    const eLo = Math.min(...plan.entries.map(e => e.price)), eHi = Math.max(...plan.entries.map(e => e.price));
+    const tpLo = Math.min(...plan.tps.map(t => t.price)), tpHi = Math.max(...plan.tps.map(t => t.price));
+    zones = [
+      { a: tpLo, b: tpHi, col: green, op: .10, label: "獲利區" },
+      { a: eLo, b: eHi, col: accent, op: .12, label: "進場區" },
+      sgn === 1 ? { a: -Infinity, b: plan.stop, col: red, op: .10, label: "危險區" }
+        : { a: plan.stop, b: Infinity, col: red, op: .10, label: "危險區" },
+    ];
+    note = `掛單有效 48 小時；成交後最多持有 7 天。<span id="cd-validity"></span><span id="cd-deadline" style="display:block"></span>`;
+  } else {
+    H = 330;
+    title = `關鍵價位地圖 <span class="hint">今天觀望 · 這是現價附近的支撐與壓力</span>`;
+    const lv = LATEST.levels || [];
+    const res = lv.filter(l => l.price > close).sort((a, b) => a.price - b.price).slice(0, 2);
+    const sup = lv.filter(l => l.price < close).sort((a, b) => b.price - a.price).slice(0, 2);
+    res.forEach(l => rows.push({ p: l.price, col: red, chip: `🧱 壓力（${l.strength} 條線重疊）`, sub: l.srcs.slice(0, 2).join("+") }));
+    sup.forEach(l => rows.push({ p: l.price, col: green, chip: `🧱 支撐（${l.strength} 條線重疊）`, sub: l.srcs.slice(0, 2).join("+") }));
+    (LATEST.wicks || []).slice(-2).forEach(w => {
+      if (Math.abs(w.mid - close) / close < 0.12)
+        rows.push({ p: w.mid, col: accent, chip: "🧲 影線磁吸點", sub: "插針未回補，價格易被吸過去" });
+    });
+    note = "突破壓力看多、跌破支撐看空——系統確認共振後才會給進出場計畫。";
+  }
+  $("#ladder-title").innerHTML = title;
+  $("#ladder-note").innerHTML = note;
+
+  const prices = rows.map(r => r.p).concat([close]);
+  let lo = Math.min(...prices), hi = Math.max(...prices);
+  const pad = (hi - lo) * 0.08 || close * 0.01;
+  lo -= pad; hi += pad;
+  const Y = p => 14 + (hi - p) / (hi - lo) * (H - 28);
+  LADDER = { lo, hi, Y, W, H };
+
+  let s = `<svg class="ladder-svg" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
+  zones.forEach(z => {
+    const a = Math.max(lo, z.a === -Infinity ? lo : z.a), b = Math.min(hi, z.b === Infinity ? hi : z.b);
+    if (b <= a) return;
+    s += `<rect x="0" y="${Y(b)}" width="${W}" height="${Y(a) - Y(b)}" fill="${z.col}" opacity="${z.op}" rx="8"/>`;
+    s += `<text x="${W - 8}" y="${Y(b) + 14}" font-size="10" fill="${z.col}" text-anchor="end" opacity=".9">${z.label}</text>`;
+  });
+  // 價位列（label 防重疊：由上而下最小間距 30px）
+  rows.sort((a, b) => b.p - a.p);
+  let lastY = -99;
+  rows.forEach(r => {
+    const yTrue = Y(r.p);
+    const y = Math.max(yTrue, lastY + 30);
+    lastY = y;
+    s += `<line x1="4" x2="${W - 4}" y1="${yTrue}" y2="${yTrue}" stroke="${r.col}" stroke-width="1.3" stroke-dasharray="6 4" opacity=".9"/>`;
+    if (Math.abs(y - yTrue) > 4) s += `<line x1="150" x2="150" y1="${yTrue}" y2="${y - 8}" stroke="${r.col}" stroke-width="1" opacity=".4"/>`;
+    s += `<text x="8" y="${y - 6}" font-size="12" font-weight="700" fill="${r.col}">${r.chip}</text>`;
+    if (r.sub) s += `<text x="8" y="${y + 8}" font-size="10.5" fill="${muted}">${r.sub}</text>`;
+    s += `<text x="${W - 8}" y="${y - 6}" font-size="13" font-weight="800" fill="${text}" text-anchor="end">${fmt(r.p)}</text>`;
+    s += `<text x="${W - 8}" y="${y + 8}" font-size="10" fill="${muted}" text-anchor="end" class="lv-dist" data-p="${r.p}">${distTxt(r.p, close)}</text>`;
+  });
+  // 現價
+  const cy2 = Y(close);
+  s += `<g id="ladder-now">
+    <line x1="4" x2="${W - 4}" y1="${cy2}" y2="${cy2}" stroke="${text}" stroke-width="1.6"/>
+    <rect x="4" y="${cy2 - 10}" rx="6" width="76" height="20" fill="${text}"/>
+    <text x="42" y="${cy2 + 4}" font-size="11" font-weight="800" fill="${card}" text-anchor="middle">▶ 現價</text>
+    <text x="${W - 8}" y="${cy2 - 6}" font-size="11" font-weight="700" fill="${text}" text-anchor="end" id="ladder-now-p">${fmt(close)}</text>
+  </g>`;
+  box.innerHTML = s + "</svg>";
+}
+const distTxt = (p, now) => {
+  const d = (p / now - 1) * 100;
+  return (d >= 0 ? "↑" : "↓") + Math.abs(d).toFixed(1) + "%";
+};
+function updateLadderLive(p) {
+  if (!LADDER) return;
+  const g = $("#ladder-now"); if (!g) return;
+  const { lo, hi, Y } = LADDER;
+  if (p < lo || p > hi) { renderLadder(); return; }
+  const y = Y(p);
+  const [line, rect, txt] = [g.children[0], g.children[1], g.children[2]];
+  line.setAttribute("y1", y); line.setAttribute("y2", y);
+  rect.setAttribute("y", y - 10); txt.setAttribute("y", y + 4);
+  const pl = $("#ladder-now-p"); if (pl) { pl.setAttribute("y", y - 6); pl.textContent = fmt(p); }
+  document.querySelectorAll(".lv-dist").forEach(el => { el.textContent = distTxt(+el.dataset.p, p); });
 }
 
 /* ---------------- 倉位計算機 ---------------- */
-function renderCalc(plan) {
+function renderCalcMaybe() {
+  const plan = LATEST.signal.plan;
+  if (!plan) { $("#calc-area").innerHTML = ""; return; }
   const savedEq = localStorage.getItem("eq") || 10000;
   $("#calc-area").innerHTML = `
   <div class="card">
-    <div class="card-title">倉位計算機 <span class="hint">固定風險百分比法：先定可虧金額，反推倉位</span></div>
+    <div class="card-title">該下多少？<span class="hint">先決定敢虧多少，其他系統幫你算</span></div>
     <div class="calc-grid">
       <div><label>帳戶本金（USDT）</label><input id="calc-eq" type="number" inputmode="decimal" value="${savedEq}"></div>
-      <div><label>單筆風險 %（建議 ${plan.risk_pct}%）</label><input id="calc-risk" type="number" inputmode="decimal" step="0.1" value="${plan.risk_pct}"></div>
+      <div><label>這筆敢虧 %（建議 ${plan.risk_pct}%）</label><input id="calc-risk" type="number" inputmode="decimal" step="0.1" value="${plan.risk_pct}"></div>
     </div>
     <div class="calc-out" id="calc-out"></div>
     <div class="countdown" id="calc-note"></div>
@@ -134,15 +284,14 @@ function renderCalc(plan) {
     const margin = notional / plan.leverage;
     const qty = notional / plan.avg_entry;
     $("#calc-out").innerHTML = `
-      <div class="cell"><b class="down">${fmt(riskUsd, 0)}</b><span>最大虧損 USDT</span></div>
-      <div class="cell"><b>${fmt(notional, 0)}</b><span>名目倉位 USDT</span></div>
-      <div class="cell"><b>${qty.toFixed(4)}</b><span>數量 BTC</span></div>
+      <div class="cell"><b class="down">${fmt(riskUsd, 0)}</b><span>最多虧 USDT<br>(碰停損時)</span></div>
+      <div class="cell"><b>${fmt(notional, 0)}</b><span>倉位總值 USDT</span></div>
+      <div class="cell"><b>${qty.toFixed(4)}</b><span>總數量 BTC</span></div>
       <div class="cell"><b>${plan.leverage}x</b><span>建議槓桿</span></div>
-      <div class="cell"><b>${fmt(margin, 0)}</b><span>所需保證金</span></div>
-      <div class="cell"><b>${fmt(plan.liq_est)}</b><span>估計強平價</span></div>`;
+      <div class="cell"><b>${fmt(margin, 0)}</b><span>需要保證金</span></div>
+      <div class="cell"><b>${fmt(plan.liq_est)}</b><span>估計強平價<br>(比停損更遠✓)</span></div>`;
     $("#calc-note").textContent =
-      `逐檔數量：${plan.entries.map(e => `第${e.i + 1}檔 ${(qty * e.w).toFixed(4)} BTC`).join("、")}。` +
-      `強平價比停損遠 ${(Math.abs(plan.liq_est - plan.stop) / plan.avg_entry * 100).toFixed(1)}% ✓（逐倉模式估算）`;
+      `逐檔下單量：${plan.entries.map((e, i) => `第${i + 1}檔 ${(qty * e.w).toFixed(4)} BTC`).join("、")}（逐倉模式估算）`;
   };
   $("#calc-eq").addEventListener("input", recompute);
   $("#calc-risk").addEventListener("input", recompute);
@@ -161,33 +310,29 @@ function renderChart() {
   const span = hi - lo; lo -= span * .04; hi += span * .04;
   const X = i => padL + (i + .5) * (W - padL - padR) / n;
   const Y = p => padT + (hi - p) / (hi - lo) * (H - padT - padB);
-  const green = css("--green"), red = css("--red"), muted = css("--muted"), border = css("--border"), accent = css("--accent");
+  CHARTX = { X, Y, n, W, H, padL, padR, lo, hi };
+  const green = css("--green"), red = css("--red"), muted = css("--muted"), border = css("--border"), accent = css("--accent"), text = css("--text");
   let s = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
-
-  // 價格格線與軸標
   const ticks = 5;
   for (let i = 0; i <= ticks; i++) {
     const p = lo + (hi - lo) * i / ticks, y = Y(p);
     s += `<line x1="${padL}" x2="${W - padR}" y1="${y}" y2="${y}" stroke="${border}" stroke-width="1"/>`;
     s += `<text x="${W - padR + 4}" y="${y + 3}" font-size="10" fill="${muted}">${Math.round(p / 1000)}k</text>`;
   }
-  // 日期標
   for (let i = 0; i < n; i += Math.ceil(n / 5)) {
     const d = new Date(C[i][0]);
     s += `<text x="${X(i)}" y="${H - 6}" font-size="9.5" fill="${muted}" text-anchor="middle">${d.getUTCMonth() + 1}/${d.getUTCDate()}</text>`;
   }
-  // 關鍵價位群（強度≥3 的前 6 個）
   (LATEST.levels || []).filter(l => l.strength >= 3 && l.price > lo && l.price < hi).slice(0, 6).forEach(l => {
     s += `<line x1="${padL}" x2="${W - padR}" y1="${Y(l.price)}" y2="${Y(l.price)}" stroke="${muted}" stroke-width="0.8" stroke-dasharray="2 4" opacity="0.7"/>`;
   });
-  // 計畫疊圖
   if (plan) {
     const eTop = Math.max(...plan.entries.map(e => e.price)), eBot = Math.min(...plan.entries.map(e => e.price));
     const zc = plan.direction === "LONG" ? green : red;
     s += `<rect x="${padL}" y="${Y(Math.max(eTop, eBot))}" width="${W - padL - padR}" height="${Math.abs(Y(eBot) - Y(eTop)) || 2}" fill="${zc}" opacity="0.12"/>`;
-    plan.entries.forEach(e => {
+    plan.entries.forEach((e, i) => {
       s += `<line x1="${padL}" x2="${W - padR}" y1="${Y(e.price)}" y2="${Y(e.price)}" stroke="${zc}" stroke-width="1" stroke-dasharray="5 3" opacity="0.85"/>
-            <text x="${W - padR + 4}" y="${Y(e.price) + 3}" font-size="9" fill="${zc}">E${e.i + 1}</text>`;
+            <text x="${W - padR + 4}" y="${Y(e.price) + 3}" font-size="9" fill="${zc}">E${i + 1}</text>`;
     });
     s += `<line x1="${padL}" x2="${W - padR}" y1="${Y(plan.stop)}" y2="${Y(plan.stop)}" stroke="${red}" stroke-width="1.4"/>
           <text x="${W - padR + 4}" y="${Y(plan.stop) + 3}" font-size="9" fill="${red}">SL</text>`;
@@ -196,62 +341,104 @@ function renderChart() {
             <text x="${W - padR + 4}" y="${Y(t.price) + 3}" font-size="9" fill="${green}">TP${i + 1}</text>`;
     });
   }
-  // 未回補影線磁吸
   (LATEST.wicks || []).forEach(w => {
-    if (w.mid > lo && w.mid < hi) {
-      s += `<circle cx="${W - padR - 6}" cy="${Y(w.mid)}" r="3" fill="${accent}" opacity="0.9"/>`;
-    }
+    if (w.mid > lo && w.mid < hi) s += `<circle cx="${W - padR - 6}" cy="${Y(w.mid)}" r="3" fill="${accent}" opacity="0.9"/>`;
   });
-  // K 棒
   const bw = Math.max(1.6, (W - padL - padR) / n * 0.62);
   C.forEach((c, i) => {
     const [, o, h, l, cl] = c, up = cl >= o, col = up ? green : red, x = X(i);
     s += `<line x1="${x}" x2="${x}" y1="${Y(h)}" y2="${Y(l)}" stroke="${col}" stroke-width="1"/>`;
     s += `<rect x="${x - bw / 2}" y="${Y(Math.max(o, cl))}" width="${bw}" height="${Math.max(1, Math.abs(Y(o) - Y(cl)))}" fill="${col}" rx="0.5"/>`;
   });
+  // 十字游標 + 現價線（由 JS 更新）
+  s += `<line id="xhair" x1="0" x2="0" y1="${padT}" y2="${H - padB}" stroke="${text}" stroke-width="0.8" opacity="0" stroke-dasharray="3 3"/>`;
+  s += `<g id="nowline"></g>`;
   s += `</svg>`;
   box.innerHTML = s;
   $("#chart-legend").innerHTML = `
-    <span><i style="background:${green}"></i>進場區/TP</span>
-    <span><i style="background:${red}"></i>停損</span>
-    <span><i style="background:${muted}"></i>關鍵價位群</span>
-    <span><i style="background:${accent};height:8px;width:8px;border-radius:99px"></i>未回補影線(磁吸)</span>`;
+    <span><i style="background:${green}"></i>上漲日</span>
+    <span><i style="background:${red}"></i>下跌日</span>
+    <span><i style="background:${muted}"></i>關鍵價位</span>
+    <span><i style="background:${accent};height:8px;width:8px;border-radius:99px"></i>影線磁吸</span>`;
+  attachCrosshair(box);
+  updateChartNow(LIVE_PRICE || LATEST.price.close);
+}
+
+function attachCrosshair(box) {
+  const tip = $("#chart-tip");
+  const move = ev => {
+    if (!CHARTX) return;
+    const rect = box.getBoundingClientRect();
+    const px = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
+    const { X, n, padL, W, padR } = CHARTX;
+    const plotW = W - padL - padR;
+    const i = Math.max(0, Math.min(n - 1, Math.floor((px / rect.width * W - padL) / plotW * n)));
+    const c = LATEST.candles[i]; if (!c) return;
+    const d = new Date(c[0]);
+    const chg = (c[4] / c[1] - 1) * 100;
+    tip.hidden = false;
+    tip.innerHTML = `<b>${d.getUTCFullYear()}/${d.getUTCMonth() + 1}/${d.getUTCDate()}</b>　<span class="${chg >= 0 ? "up" : "down"}">${chg >= 0 ? "+" : ""}${chg.toFixed(1)}%</span><br>
+      高 ${fmt(c[2])} · 低 ${fmt(c[3])}<br>開 ${fmt(c[1])} · 收 ${fmt(c[4])}`;
+    const tw = tip.offsetWidth;
+    tip.style.left = Math.min(Math.max(4, px - tw / 2), rect.width - tw - 4) + "px";
+    tip.style.top = "8px";
+    const xl = box.querySelector("#xhair");
+    if (xl) { const sx = X(i); xl.setAttribute("x1", sx); xl.setAttribute("x2", sx); xl.setAttribute("opacity", "0.7"); }
+  };
+  const leave = () => { tip.hidden = true; const xl = box.querySelector("#xhair"); if (xl) xl.setAttribute("opacity", "0"); };
+  box.onpointermove = move; box.onpointerdown = move; box.onpointerleave = leave;
+}
+
+function updateChartNow(p) {
+  if (!CHARTX) return;
+  const g = document.querySelector("#nowline"); if (!g) return;
+  const { Y, W, padL, padR, lo, hi } = CHARTX;
+  if (!p || p < lo || p > hi) { g.innerHTML = ""; return; }
+  const text = css("--text"), card = css("--card");
+  const y = Y(p);
+  g.innerHTML = `<line x1="${padL}" x2="${W - padR}" y1="${y}" y2="${y}" stroke="${text}" stroke-width="1" stroke-dasharray="2 3" opacity=".85"/>
+    <rect x="${W - padR + 1}" y="${y - 8}" width="${padR - 3}" height="16" rx="4" fill="${text}"/>
+    <text x="${W - padR + 26}" y="${y + 3.5}" font-size="9" font-weight="800" fill="${card}" text-anchor="middle">${Math.round(p / 1000)}k 現價</text>`;
 }
 
 /* ---------------- 因子 ---------------- */
+function factorRow(f, withGloss) {
+  const w = Math.min(Math.abs(f.score), 100) / 2;
+  const side = f.score >= 0 ? `left:50%;width:${w}%` : `right:50%;width:${w}%`;
+  const col = f.score >= 0 ? css("--green") : css("--red");
+  const dirTxt = !f.ok ? "無資料" : Math.abs(f.score) < 8 ? "中立" : (f.score > 0 ? "幫多方" : "幫空方");
+  return `<div class="factor ${f.ok ? "" : "off"}">
+    <div class="factor-top">
+      <div class="factor-name">${FNAMES[f.name] || esc(f.label)}</div>
+      <div class="factor-bar"><i style="${side};background:${col}"></i></div>
+      <div class="factor-score" style="color:${Math.abs(f.score) < 8 ? "var(--muted)" : f.score >= 0 ? "var(--green)" : "var(--red)"}">${dirTxt}</div>
+    </div>
+    <div class="factor-note">${esc(f.note)}</div>
+    ${withGloss ? `<div class="factor-gloss">ⓘ ${FGLOSS[f.name] || ""}</div>` : ""}
+  </div>`;
+}
 function renderFactors() {
-  const fs = LATEST.signal.factors || [];
-  $("#factors").innerHTML = fs.map(f => {
-    const w = Math.min(Math.abs(f.score), 100) / 2;
-    const side = f.score >= 0 ? `left:50%;width:${w}%` : `right:50%;width:${w}%`;
-    const col = f.score >= 0 ? css("--green") : css("--red");
-    return `<div class="factor ${f.ok ? "" : "off"}">
-      <div class="factor-top">
-        <div class="factor-name">${esc(f.label)} <span class="w-chip">w ${f.weight}</span></div>
-        <div class="factor-bar"><i style="${side};background:${col}"></i></div>
-        <div class="factor-score" style="color:${f.score >= 0 ? "var(--green)" : "var(--red)"}">${f.score > 0 ? "+" : ""}${Math.round(f.score)}</div>
-      </div>
-      <div class="factor-note">${esc(f.note)}</div>
-    </div>`;
-  }).join("");
+  const fs = (LATEST.signal.factors || []).slice();
+  const top = fs.filter(f => f.ok).sort((a, b) => Math.abs(b.score * b.weight) - Math.abs(a.score * a.weight)).slice(0, 3);
+  $("#factors-top").innerHTML = top.map(f => factorRow(f, false)).join("");
+  $("#factors-all").innerHTML = fs.map(f => factorRow(f, true)).join("");
 }
 
 /* ---------------- 紀律卡 ---------------- */
 function renderDiscipline() {
   const p = LATEST.meta.params, m = LATEST.stats_mini;
   $("#discipline").innerHTML = `
-    <div class="card-title">風險紀律（系統強制執行）</div>
+    <div class="card-title">保命規則（系統強制執行）</div>
     <div class="pill-row">
-      <span class="pill">單筆風險 ≤ ${p.risk_pct_base * 1.5}%</span>
-      <span class="pill">槓桿上限 ${p.max_leverage}x</span>
-      <span class="pill">連續 2 次停損 → 冷卻 1 日</span>
-      <span class="pill">重大事件 24h 內不開新倉</span>
-      <span class="pill">持倉上限 ${p.max_hold_days} 天</span>
-      <span class="pill">TP1 後停損移保本</span>
+      <span class="pill">🛡 一筆最多虧 ${p.risk_pct_base * 1.5}%</span>
+      <span class="pill">⚖️ 槓桿最高 ${p.max_leverage} 倍</span>
+      <span class="pill">🧊 連虧 2 筆休息 1 天</span>
+      <span class="pill">📅 大事件前不進場</span>
+      <span class="pill">⏰ 最多抱 ${p.max_hold_days} 天</span>
+      <span class="pill">🔒 到目標1後這筆穩不虧</span>
     </div>
     <div style="font-size:12px;color:var(--muted);margin-top:10px">
-      系統累積：${m.n_closed} 筆結案 · 勝率 ${pct(m.win_rate)} · 期望值 ${fmtR(m.expectancy_r)} ·
-      掛單成交率 ${pct(m.fill_rate)} · 累積 ${fmtR(m.total_r)}
+      至今 ${m.n_closed} 筆結案 · 勝率 ${pct(m.win_rate)} · 平均每筆 ${fmtR(m.expectancy_r)} · 掛單成交率 ${pct(m.fill_rate)}
     </div>`;
 }
 
@@ -267,23 +454,24 @@ function renderReview() {
   });
   const S = MODE === "all" ? REVIEW.stats_all : MODE === "live" ? REVIEW.stats_live : REVIEW.stats_backtest;
   $("#kpis").innerHTML = [
-    ["勝率", pct(S.win_rate), S.win_rate >= .5 ? "up" : ""],
-    ["期望值", fmtR(S.expectancy_r), (S.expectancy_r || 0) > 0 ? "up" : "down"],
-    ["盈虧比 PF", S.profit_factor ?? "—", (S.profit_factor || 0) >= 1.5 ? "up" : ""],
-    ["掛單成交率", pct(S.fill_rate), ""],
-    ["累積 R", fmtR(S.total_r), (S.total_r || 0) > 0 ? "up" : "down"],
-    ["最大回撤", fmtR(S.max_dd_r), "down"],
-  ].map(([k, v, c]) => `<div class="kpi"><b class="${c}">${v}</b><span>${k}</span></div>`).join("");
-
-  renderEquity();
+    ["勝率", pct(S.win_rate), "贏的比例", S.win_rate >= .5 ? "up" : ""],
+    ["期望值", fmtR(S.expectancy_r), "每筆平均賺賠", (S.expectancy_r || 0) > 0 ? "up" : "down"],
+    ["盈虧比", S.profit_factor ?? "—", "總賺 ÷ 總虧", (S.profit_factor || 0) >= 1.5 ? "up" : ""],
+    ["成交率", pct(S.fill_rate), "掛單有進場的比例", ""],
+    ["累積", fmtR(S.total_r), "總成績", (S.total_r || 0) > 0 ? "up" : "down"],
+    ["最大回撤", fmtR(S.max_dd_r), "最慘的連虧", "down"],
+  ].map(([k, v, sub, c]) => `<div class="kpi"><b class="${c}">${v}</b><span><b style="font-size:11px;display:inline">${k}</b><br>${sub}</span></div>`).join("") +
+    `<div style="grid-column:1/-1;font-size:11px;color:var(--muted);text-align:center">R = 一筆願意虧的錢。賺 +2R = 賺到風險額的 2 倍</div>`;
+  renderRBars(); renderEquity();
 
   const cal = S.calibration || [];
-  $("#calibration").innerHTML = cal.length ? `<table class="mini-table"><thead>
-    <tr><th>信心區間</th><th class="num">筆數</th><th class="num">勝率</th><th class="num">平均 R</th></tr></thead><tbody>
-    ${cal.map(c => `<tr><td>${c.bucket}</td><td class="num">${c.n}</td><td class="num">${pct(c.win)}</td>
-     <td class="num" style="color:${c.avg_r >= 0 ? "var(--green)" : "var(--red)"}">${fmtR(c.avg_r)}</td></tr>`).join("")}
-    </tbody></table>
-    <div class="hint" style="margin-top:6px">高信心區勝率應高於低信心區；若倒掛，優化器將提高門檻。</div>` :
+  $("#calibration").innerHTML = cal.length ? cal.map(c => `
+    <div class="calib-row">
+      <span class="nm">把握度 ${c.bucket}</span>
+      <div class="bar"><i style="width:${c.win * 100}%"></i></div>
+      <span class="val">勝率 ${pct(c.win)} · ${c.n} 筆</span>
+    </div>`).join("") +
+    `<div class="hint-block">把握度高的一排應該更長；若倒過來，系統會自動提高出手門檻。</div>` :
     `<div class="skeleton" style="padding:12px 0">樣本不足</div>`;
 
   const trades = (REVIEW.trades || []).filter(t => MODE === "all" || t.mode === MODE);
@@ -293,14 +481,52 @@ function renderReview() {
     `<div class="card skeleton">此範圍尚無交易</div>`;
 }
 
+function renderRBars() {
+  const box = $("#rbars-chart"); if (!box || !REVIEW) return;
+  const closed = (REVIEW.trades || []).filter(t => t.status === "closed" && t.r != null && (MODE === "all" || t.mode === MODE))
+    .sort((a, b) => a.date.localeCompare(b.date)).slice(-40);
+  if (closed.length < 2) { box.innerHTML = `<div class="skeleton">樣本不足</div>`; return; }
+  const W = box.clientWidth || 340, H = box.clientHeight || 190;
+  const padT = 14, padB = 16, padL = 30, padR = 6;
+  const maxAbs = Math.max(0.5, ...closed.map(t => Math.abs(t.r)));
+  const Y = v => padT + (maxAbs - v) / (2 * maxAbs) * (H - padT - padB);
+  const bw = Math.min(18, (W - padL - padR) / closed.length * 0.7);
+  const step = (W - padL - padR) / closed.length;
+  const green = css("--green"), red = css("--red"), muted = css("--muted"), border = css("--border");
+  let s = `<svg viewBox="0 0 ${W} ${H}">`;
+  s += `<line x1="${padL}" x2="${W - padR}" y1="${Y(0)}" y2="${Y(0)}" stroke="${muted}" stroke-width="1"/>`;
+  [maxAbs, -maxAbs].forEach(v => {
+    s += `<line x1="${padL}" x2="${W - padR}" y1="${Y(v)}" y2="${Y(v)}" stroke="${border}"/>
+          <text x="2" y="${Y(v) + 4}" font-size="9.5" fill="${muted}">${v > 0 ? "+" : ""}${v.toFixed(1)}R</text>`;
+  });
+  let best = null, worst = null;
+  closed.forEach((t, i) => {
+    if (!best || t.r > best.r) best = { ...t, i };
+    if (!worst || t.r < worst.r) worst = { ...t, i };
+  });
+  closed.forEach((t, i) => {
+    const x = padL + i * step + (step - bw) / 2;
+    const y0 = Y(Math.max(0, t.r)), y1 = Y(Math.min(0, t.r));
+    s += `<rect x="${x}" y="${y0}" width="${bw}" height="${Math.max(2, y1 - y0)}" rx="3"
+      fill="${t.r >= 0 ? green : red}"><title>${t.id}：${fmtR(t.r)}</title></rect>`;
+  });
+  [best, worst].forEach(t => {
+    if (!t || Math.abs(t.r) < 0.01) return;
+    const x = padL + t.i * step + step / 2;
+    s += `<text x="${x}" y="${Y(t.r) + (t.r >= 0 ? -4 : 12)}" font-size="9.5" font-weight="700"
+      fill="${t.r >= 0 ? green : red}" text-anchor="middle">${fmtR(t.r)}</text>`;
+  });
+  box.innerHTML = s + "</svg>";
+}
+
 function tradeCard(t, isOpen) {
   const dirCls = t.direction === "LONG" ? "long" : "short";
   const rCol = t.r == null ? "var(--muted)" : t.r > 0 ? "var(--green)" : "var(--red)";
   const status = isOpen ? (t.status === "pending" ? "⏳ 掛單中" : "🟢 持倉中")
-    : t.status === "cancelled" ? "未成交" : "已結案";
+    : t.status === "cancelled" ? "沒等到價（未進場）" : "已結案";
   const modeChip = t.mode === "backtest" ? `<span class="badge badge-slate">回測</span>` : `<span class="badge badge-green">實盤</span>`;
   const exits = (t.exits || []).map(e => {
-    const rn = { tp1: "TP1", tp2: "TP2", stop: "停損", be_stop: "保本出場", trail_stop: "移動停損", time: "到期平倉", reverse_signal: "反向訊號離場" }[e.reason] || e.reason;
+    const rn = { tp1: "🎯目標1", tp2: "🎯目標2", stop: "🛑停損", be_stop: "保本出場", trail_stop: "移動停損", time: "到期平倉", reverse_signal: "反向訊號離場" }[e.reason] || e.reason;
     return `${rn} @ ${fmt(e.price)}（${Math.round(e.frac * 100)}%）`;
   }).join("；");
   return `<details class="trade" ${isOpen ? "open" : ""}>
@@ -310,12 +536,12 @@ function tradeCard(t, isOpen) {
       <span class="t-r" style="color:${rCol}">${t.status === "cancelled" ? "—" : fmtR(t.r)}</span>
     </summary>
     <div class="t-body">
-      <div class="kv"><span>信心 / 分數</span><b>${t.confidence} / ${t.score > 0 ? "+" : ""}${t.score}</b></div>
-      <div class="kv"><span>掛單</span><b style="font-weight:500;font-size:12.5px">${t.plan.entries.map(e => fmt(e.price)).join(" / ")}</b></div>
-      <div class="kv"><span>實際均價（成交 ${Math.round((t.filled_w || 0) * 100)}%）</span><b>${fmt(t.avg_fill)}</b></div>
-      <div class="kv"><span>停損 ${isOpen ? "（目前）" : ""}</span><b>${fmt(isOpen ? t.stop_now : t.plan.stop)}</b></div>
+      <div class="kv"><span>把握度 / 分數</span><b>${t.confidence} / ${t.score > 0 ? "+" : ""}${t.score}</b></div>
+      <div class="kv"><span>掛單價</span><b style="font-weight:500;font-size:12.5px">${t.plan.entries.map(e => fmt(e.price)).join(" / ")}</b></div>
+      <div class="kv"><span>實際進場均價（用了 ${Math.round((t.filled_w || 0) * 100)}% 的計畫）</span><b>${fmt(t.avg_fill)}</b></div>
+      <div class="kv"><span>停損${isOpen ? "（目前）" : ""}</span><b>${fmt(isOpen ? t.stop_now : t.plan.stop)}</b></div>
       ${exits ? `<div class="kv"><span>出場</span><b style="font-weight:500;font-size:12.5px">${exits}</b></div>` : ""}
-      <div class="kv"><span>MFE / MAE</span><b><span class="up">${fmtR(t.mfe_r)}</span> / <span class="down">${fmtR(t.mae_r)}</span></b></div>
+      <div class="kv"><span>過程中最大浮盈 / 最痛回檔</span><b><span class="up">${fmtR(t.mfe_r)}</span> / <span class="down">${fmtR(t.mae_r)}</span></b></div>
       <div class="kv"><span>風險 / 槓桿</span><b>${t.plan.risk_pct}% / ${t.plan.leverage}x</b></div>
       ${(t.lessons || []).map(l => `<span class="lesson">📝 ${esc(l)}</span>`).join("")}
     </div>
@@ -326,7 +552,7 @@ function renderEquity() {
   const box = $("#equity-chart"); if (!box || !REVIEW) return;
   const eq = (REVIEW.equity || []).filter(p => MODE === "all" || p.mode === MODE);
   if (eq.length < 2) { box.innerHTML = `<div class="skeleton">樣本不足</div>`; return; }
-  const W = box.clientWidth || 340, H = box.clientHeight || 200;
+  const W = box.clientWidth || 340, H = box.clientHeight || 190;
   const padR = 40, padT = 8, padB = 18, padL = 6;
   const ys = eq.map(p => p.r);
   let lo = Math.min(0, ...ys), hi = Math.max(0, ...ys);
@@ -345,7 +571,6 @@ function renderEquity() {
     if (p.mode === "backtest") pathBT += (pathBT ? " L" : "M") + pt;
     else pathLV += (pathLV ? " L" : "M") + pt;
   });
-  // 連接回測末點與實盤首點
   const lastBT = eq.map((p, i) => [p, i]).filter(x => x[0].mode === "backtest").pop();
   const firstLV = eq.map((p, i) => [p, i]).filter(x => x[0].mode === "live")[0];
   if (lastBT && firstLV && pathLV) pathLV = `M${X(lastBT[1])},${Y(lastBT[0].r)} L` + pathLV.slice(1);
@@ -363,17 +588,16 @@ function renderSystem() {
   const logs = [...(OPT.history || [])].reverse();
   $("#opt-log").innerHTML = logs.length ? logs.slice(0, 40).map(l => `
     <div class="log-item">
-      <div class="d">${l.date} · v${OPT.version}</div>
+      <div class="d">${l.date}</div>
       <div class="chg-line"><b>${esc(l.param)}</b>：${esc(String(l.old))} → <b style="color:var(--accent)">${esc(String(l.new))}</b></div>
       <div class="why">${esc(l.reason)}</div>
     </div>`).join("") :
     `<div class="skeleton" style="padding:12px 0">尚無調參紀錄——累積足夠結案樣本後，每週自動檢討</div>`;
 
   const W = OPT.weights || {}, E = OPT.factor_edges || {};
-  const labels = { trend_daily: "日線趨勢", trend_4h: "4小時結構", momentum: "動能", funding: "資金費率", oi_price: "OI×價格", taker_flow: "CVD 主動流", rvol: "相對量能", wick_magnet: "影線磁吸", levels: "關鍵價位", squeeze_setup: "軋空醞釀" };
   $("#weights").innerHTML = Object.entries(W).map(([k, v]) => {
     const e = E[k] || {};
-    return `<div class="wrow"><span class="nm">${labels[k] || k}</span>
+    return `<div class="wrow"><span class="nm">${FNAMES[k] || k}</span>
       <div class="wbar"><i style="width:${v / 1.6 * 100}%"></i></div>
       <span class="val">${v.toFixed(2)}｜${e.edge != null ? "命中 " + pct(e.edge) : "樣本不足"}</span></div>`;
   }).join("");
@@ -388,7 +612,7 @@ function renderSystem() {
     ["trail_atr_mult", "移動停損（ATR）", v => v + "×"],
     ["risk_pct_base", "基準單筆風險", v => v + "%"],
     ["score_threshold", "出手分數門檻", v => "±" + v],
-    ["confidence_floor", "信心門檻", v => v],
+    ["confidence_floor", "把握度門檻", v => v],
     ["entry_validity_hours", "掛單有效期", v => v + " 小時"],
     ["max_hold_days", "最長持倉", v => v + " 天"],
     ["max_leverage", "槓桿上限", v => v + "x"],
@@ -398,7 +622,7 @@ function renderSystem() {
     `<div class="hint" style="margin-top:6px">模型版本 v${OPT.version} · 最近調參 ${OPT.tuned_at || "—"}</div>`;
 
   $("#philosophy").innerHTML = [
-    ["大賺小賠的結構", "停損固定小（1~2% 帳戶風險），獲利用「TP1 保本 → TP2 收割 → 移動停損讓利潤奔跑」拉長右尾。虧損永遠是計畫內的小數字，獲利上不封頂。"],
+    ["大賺小賠的結構", "停損固定小（1~2% 帳戶風險），獲利用「目標1保本 → 目標2收割 → 移動停損讓利潤奔跑」拉長右尾。虧損永遠是計畫內的小數字，獲利上不封頂。"],
     ["高掛單成功率的來源", "掛單不追價：吸附在支撐/壓力群前緣，配合歷史觸價機率選深度。成交率與成本是蹺蹺板，優化器依近 20 筆成交率自動調整深度。"],
     ["逆向與擁擠度（GCR 反身性）", "資金費率極端分位＝人群擁擠訊號。空頭付費增倉但價格拒跌＝軋空燃料；多頭狂熱滯漲＝多殺多前兆。在共識最擁擠處找結構脆弱點。"],
     ["訂單流驗證（OI×CVD）", "突破要有新資金（OI↑）與主動買盤（CVD↑）共振才是真突破；價漲量縮、OI 下滑的突破視為誘多，不追。"],
@@ -408,7 +632,7 @@ function renderSystem() {
   ].map(([t, c]) => `<details class="phil"><summary>${t}</summary><p>${c}</p></details>`).join("");
 
   $("#about").innerHTML = `
-    <b>資料來源</b>：K 線 ${esc(LATEST.src.klines)} · 衍生品 ${esc(LATEST.src.deriv)}（每日 UTC 00:07 由 GitHub Actions 自動更新）<br>
+    <b>資料來源</b>：K 線 ${esc(LATEST.src.klines)} · 衍生品 ${esc(LATEST.src.deriv)}（GitHub Actions 自動更新：訊號每日 08:07、持倉追蹤每 4 小時）<br>
     <b>免責聲明</b>：本工具為研究與教育用途的訊號模擬器，非投資建議。加密貨幣合約具極高風險，
     槓桿交易可能損失全部本金。過去績效（含回測）不代表未來表現，請自行評估並僅以可承受損失的資金參與。<br>
     <a href="https://github.com/kenhuangads/btc-trader" style="color:var(--accent)">GitHub 原始碼</a> · 引擎 v${OPT.version}`;
@@ -419,19 +643,19 @@ function renderTouch() {
   const L = OPT.touch_probs.long, S = OPT.touch_probs.short;
   const keys = Object.keys(L).map(Number).sort((a, b) => a - b);
   if (!keys.length) { box.innerHTML = ""; return; }
-  const W = box.clientWidth || 340, H = box.clientHeight || 200;
+  const W = box.clientWidth || 340, H = box.clientHeight || 190;
   const padR = 10, padT = 10, padB = 20, padL = 34;
   const X = k => padL + (k - keys[0]) / (keys[keys.length - 1] - keys[0]) * (W - padL - padR);
   const Y = p => padT + (1 - p) * (H - padT - padB);
   const green = css("--green"), red = css("--red"), muted = css("--muted"), border = css("--border");
   let s = `<svg viewBox="0 0 ${W} ${H}">`;
-  [0, .25, .5, .75, 1].forEach(p => {
+  [0, .5, 1].forEach(p => {
     s += `<line x1="${padL}" x2="${W - padR}" y1="${Y(p)}" y2="${Y(p)}" stroke="${border}"/>
           <text x="4" y="${Y(p) + 3}" font-size="9.5" fill="${muted}">${p * 100}%</text>`;
   });
   [0.5, 1.0, 1.5, 2.0, 2.5].forEach(k => {
     if (k >= keys[0] && k <= keys[keys.length - 1])
-      s += `<text x="${X(k)}" y="${H - 6}" font-size="9.5" fill="${muted}" text-anchor="middle">${k}×ATR</text>`;
+      s += `<text x="${X(k)}" y="${H - 6}" font-size="9.5" fill="${muted}" text-anchor="middle">掛 ${k} 檔遠</text>`;
   });
   const line = (obj, col) => {
     let d = "";
@@ -439,8 +663,6 @@ function renderTouch() {
     return `<path d="${d}" fill="none" stroke="${col}" stroke-width="2"/>`;
   };
   s += line(L, green) + line(S, red);
-  s += `<text x="${W - 80}" y="${padT + 10}" font-size="10" fill="${green}">— 做多掛單</text>`;
-  s += `<text x="${W - 80}" y="${padT + 24}" font-size="10" fill="${red}">— 做空掛單</text>`;
   box.innerHTML = s + "</svg>";
 }
 
@@ -465,32 +687,25 @@ async function livePriceLoop() {
     if (document.hidden) return;
     const p = await fetchLive();
     if (!p || !LATEST) return;
+    LIVE_PRICE = p;
     $("#live-price").textContent = fmt(p);
     const chg = (p / LATEST.price.close - 1) * 100;
     const el = $("#live-chg");
     el.textContent = `${chg >= 0 ? "▲" : "▼"}${Math.abs(chg).toFixed(2)}%`;
     el.className = "chg " + (chg >= 0 ? "up" : "down");
-    const plan = LATEST.signal.plan;
-    if (plan) {
-      const e1 = plan.entries[0].price;
-      const d = (p - e1) / p * 100;
-      const hint = plan.direction === "LONG"
-        ? (d > 0 ? `現價距第 1 檔掛單 -${d.toFixed(2)}%` : `已低於第 1 檔掛單（可能已成交）`)
-        : (d < 0 ? `現價距第 1 檔掛單 +${(-d).toFixed(2)}%` : `已高於第 1 檔掛單（可能已成交）`);
-      $("#cd-validity").textContent = "｜" + hint;
-    }
+    updateLadderLive(p);
+    updateChartNow(p);
   };
   update(); setInterval(update, 30000);
 }
 
 function tickCountdown() {
   const plan = LATEST?.signal?.plan; if (!plan) return;
-  const el = $("#cd-deadline"); if (!el) return;
-  const now = Date.now();
-  const fmtDur = ms => { const h = Math.floor(ms / 3600e3), m = Math.floor(ms % 3600e3 / 60e3); return `${h}h ${m}m`; };
-  const v = plan.validity_ms - now, d = plan.deadline_ms - now;
-  el.textContent = (v > 0 ? `⏳ 掛單有效期剩 ${fmtDur(v)}` : "⌛ 掛單有效期已過（未成交部分應撤單）") +
-    (d > 0 ? ` · 持倉時間上限剩 ${fmtDur(d)}` : "");
+  const v = plan.validity_ms - Date.now(), d = plan.deadline_ms - Date.now();
+  const fmtDur = ms => { const h = Math.floor(ms / 3600e3), m = Math.floor(ms % 3600e3 / 60e3); return `${h} 小時 ${m} 分`; };
+  const ev = $("#cd-validity"), ed = $("#cd-deadline");
+  if (ev) ev.textContent = v > 0 ? `⏳ 掛單剩 ${fmtDur(v)}` : "⌛ 掛單已過期（沒成交的單請撤掉）";
+  if (ed) ed.textContent = d > 0 ? `⏰ 持倉時間上限剩 ${fmtDur(d)}` : "";
 }
 
 /* ---------------- 頁籤 ---------------- */
@@ -500,7 +715,7 @@ document.querySelectorAll("#nav button").forEach(b => {
     document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
     $("#tab-" + b.dataset.tab).classList.add("active");
     window.scrollTo({ top: 0 });
-    if (b.dataset.tab === "review") { renderEquity(); }
+    if (b.dataset.tab === "review") { renderEquity(); renderRBars(); }
     if (b.dataset.tab === "system") { renderTouch(); }
   });
 });
