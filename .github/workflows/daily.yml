@@ -1,0 +1,54 @@
+name: daily-update
+
+on:
+  schedule:
+    - cron: "7 0 * * *"   # 每日 00:07 UTC（台北 08:07）＝ BTC 日K收盤後
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: "強制重跑回測（重建統計與權重）"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run engine
+        run: |
+          ARGS=""
+          if [ "${{ inputs.bootstrap }}" = "true" ]; then ARGS="--bootstrap"; fi
+          python -m engine.run_daily $ARGS
+
+      - name: Commit & push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A docs/data state history
+          if git diff --cached --quiet; then
+            echo "no changes"; exit 0
+          fi
+          git commit -m "chore(data): daily update $(date -u +%F)"
+          for i in 1 2 3; do
+            git push && exit 0
+            git pull --rebase
+          done
+          exit 1

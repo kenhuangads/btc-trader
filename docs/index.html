@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BTC 波段訊號 · 每日智能推薦與復盤</title>
+<meta name="description" content="比特幣合約短線波段（7 日內）智能推薦：進出場價格、槓桿建議、每日復盤與迭代優化。">
+<meta name="theme-color" content="#0a0e17">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header id="hdr">
+  <div class="hdr-row">
+    <div class="brand">₿ 波段訊號</div>
+    <div class="live">
+      <span id="live-price">—</span>
+      <span id="live-chg" class="chg"></span>
+    </div>
+  </div>
+  <div class="hdr-sub">
+    <span id="data-time">載入中…</span>
+    <span id="stale-badge" class="badge badge-red" hidden>資料過期</span>
+  </div>
+</header>
+
+<main id="main">
+  <!-- ==================== 今日 ==================== -->
+  <section id="tab-today" class="tab active">
+    <div id="macro-strip"></div>
+    <div id="hero" class="card hero"><div class="skeleton">載入訊號中…</div></div>
+    <div id="plan-area"></div>
+    <div id="calc-area"></div>
+    <div class="card">
+      <div class="card-title">日線走勢與關鍵價位 <span class="hint">近 120 日 · 掛單/停損/止盈疊圖</span></div>
+      <div id="chart" class="chart-wrap"></div>
+      <div id="chart-legend" class="legend"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">因子儀表 <span class="hint">正分偏多 · 負分偏空 · 權重由優化器迭代</span></div>
+      <div id="factors"></div>
+    </div>
+    <div id="discipline" class="card"></div>
+  </section>
+
+  <!-- ==================== 復盤 ==================== -->
+  <section id="tab-review" class="tab">
+    <div class="seg" id="mode-seg">
+      <button data-mode="all" class="on">全部</button>
+      <button data-mode="live">實盤追蹤</button>
+      <button data-mode="backtest">回測</button>
+    </div>
+    <div id="kpis" class="kpis"></div>
+    <div class="card">
+      <div class="card-title">權益曲線（累積 R）<span class="hint">灰＝回測樣本 · 藍＝上線後實盤追蹤</span></div>
+      <div id="equity-chart" class="chart-wrap sm"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">信心分數校準 <span class="hint">系統自我誠實度：高信心是否真的高勝率</span></div>
+      <div id="calibration"></div>
+    </div>
+    <div class="card-title lone">交易紀錄</div>
+    <div id="trades"></div>
+  </section>
+
+  <!-- ==================== 系統 ==================== -->
+  <section id="tab-system" class="tab">
+    <div class="card">
+      <div class="card-title">優化日誌 <span class="hint">系統每次自我調參的內容與理由</span></div>
+      <div id="opt-log"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">因子權重與命中率</div>
+      <div id="weights"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">掛單觸價機率曲線 <span class="hint">收盤 ±k×ATR 的限價單，48h 內成交的歷史頻率</span></div>
+      <div id="touch-chart" class="chart-wrap sm"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">目前參數</div>
+      <div id="params"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">策略哲學（內建鐵律）</div>
+      <div id="philosophy"></div>
+    </div>
+    <div class="card muted-card" id="about"></div>
+  </section>
+</main>
+
+<nav id="nav">
+  <button data-tab="today" class="on"><span class="ico">📌</span>今日</button>
+  <button data-tab="review"><span class="ico">📊</span>復盤</button>
+  <button data-tab="system"><span class="ico">⚙️</span>系統</button>
+</nav>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "BTC 波段訊號 · 每日智能推薦與復盤",
+  "short_name": "BTC波段",
+  "description": "比特幣合約短線波段智能推薦、每日復盤、迭代優化",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0a0e17",
+  "theme_color": "#0a0e17",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
