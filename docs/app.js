@@ -57,11 +57,12 @@ function renderHeader() {
   if (LATEST.stale || age > 30 * 3600e3) $("#stale-badge").hidden = false;
   $("#live-price").textContent = fmt(LATEST.price.close);
 }
-function openModal() { $("#modal").hidden = false; document.body.style.overflow = "hidden"; }
-function closeModal() { $("#modal").hidden = true; document.body.style.overflow = ""; localStorage.setItem("onboarded", "1"); }
+function openModal() { const m = $("#modal"); m.hidden = false; m.style.display = "flex"; document.body.style.overflow = "hidden"; }
+function closeModal() { const m = $("#modal"); m.hidden = true; m.style.display = "none"; document.body.style.overflow = ""; try { localStorage.setItem("onboarded", "1"); } catch (e) { } }
 $("#help-btn").addEventListener("click", openModal);
 $("#modal-close").addEventListener("click", closeModal);
 $("#modal").addEventListener("click", e => { if (e.target === $("#modal")) closeModal(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
 
 /* ---------------- 今日 ---------------- */
 function renderToday() {

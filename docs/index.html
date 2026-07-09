@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
 <header id="hdr">
@@ -131,7 +131,8 @@
 <!-- 新手指南 -->
 <div id="modal" class="modal" hidden>
   <div class="modal-card">
-    <div class="modal-head"><b>三步驟上手</b><button id="modal-close">✕</button></div>
+    <div class="modal-head"><b>三步驟上手</b><button id="modal-close" aria-label="關閉"
+      onclick="var m=document.getElementById('modal');m.hidden=true;m.style.display='none';document.body.style.overflow='';try{localStorage.setItem('onboarded','1')}catch(e){}">✕</button></div>
     <div class="step"><span class="step-n">1</span><div><b>每天早上 08:07 看一眼</b><br>
       儀表指針偏<span class="up">綠＝看多</span>、偏<span class="down">紅＝看空</span>、在中間＝今天休息。下面一句白話結論告訴你為什麼。</div></div>
     <div class="step"><span class="step-n">2</span><div><b>有訊號才動手</b><br>
@@ -150,6 +151,6 @@
   </div>
 </div>
 
-<script src="app.js"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>
