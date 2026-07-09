@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="stylesheet" href="styles.css?v=5">
+<link rel="stylesheet" href="styles.css?v=6">
 </head>
 <body>
 <header id="hdr">
@@ -52,9 +52,16 @@
     <div id="calc-area"></div>
 
     <div class="card">
-      <div class="card-title">日線走勢圖 <span class="hint">近 120 天 · 點圖可看每天價格</span></div>
-      <div id="chart" class="chart-wrap"></div>
-      <div id="chart-tip" class="chart-tip" hidden></div>
+      <div class="card-title">日線走勢圖 <span class="hint">點或滑過 K 棒可看當天價格</span></div>
+      <div class="seg seg-sm" id="range-seg">
+        <button data-days="30">近 30 天</button>
+        <button data-days="60" class="on">近 60 天</button>
+        <button data-days="120">近 120 天</button>
+      </div>
+      <div style="position:relative">
+        <div id="chart" class="chart-wrap"></div>
+        <div id="chart-tip" class="chart-tip" hidden></div>
+      </div>
       <div id="chart-legend" class="legend"></div>
     </div>
 
@@ -151,6 +158,6 @@
   </div>
 </div>
 
-<script src="app.js?v=5"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>

@@ -147,6 +147,9 @@ tr:last-child td{border-bottom:none}
 .seg{display:flex;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:4px;gap:4px;margin-bottom:12px}
 .seg button{flex:1;padding:8px 0;border-radius:9px;font-size:13px;color:var(--muted);font-weight:600}
 .seg button.on{background:var(--card2);color:var(--text)}
+.seg.seg-sm{margin-bottom:8px;padding:3px;background:var(--card2);border:none}
+.seg.seg-sm button{padding:5px 0;font-size:12px;border-radius:8px}
+.seg.seg-sm button.on{background:var(--card);box-shadow:0 1px 4px rgba(0,0,0,.18)}
 .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
 .kpi{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:10px 6px;text-align:center}
 .kpi b{display:block;font-size:19px;font-variant-numeric:tabular-nums}

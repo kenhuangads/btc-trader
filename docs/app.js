@@ -28,6 +28,7 @@ const FGLOSS = {
 
 let LATEST = null, REVIEW = null, OPT = null, MODE = "all", LIVE_PRICE = null;
 let LADDER = null, CHARTX = null;
+let CHART_DAYS = +(localStorage.getItem("chartDays") || 60);
 
 /* ---------------- 啟動 ---------------- */
 async function boot() {
@@ -321,7 +322,7 @@ function renderCalcMaybe() {
 function renderChart() {
   const box = $("#chart"); if (!box || !LATEST) return;
   const W = box.clientWidth || 340, H = box.clientHeight || 340;
-  const C = LATEST.candles, plan = LATEST.signal.plan;
+  const C = LATEST.candles.slice(-CHART_DAYS), plan = LATEST.signal.plan;
   const padR = 54, padT = 10, padB = 22, padL = 6;
   const n = C.length;
   let lo = Math.min(...C.map(c => c[3])), hi = Math.max(...C.map(c => c[2]));
@@ -329,7 +330,7 @@ function renderChart() {
   const span = hi - lo; lo -= span * .04; hi += span * .04;
   const X = i => padL + (i + .5) * (W - padL - padR) / n;
   const Y = p => padT + (hi - p) / (hi - lo) * (H - padT - padB);
-  CHARTX = { X, Y, n, W, H, padL, padR, lo, hi };
+  CHARTX = { X, Y, n, W, H, padL, padR, lo, hi, candles: C };
   const green = css("--green"), red = css("--red"), muted = css("--muted"), border = css("--border"), accent = css("--accent"), text = css("--text");
   let s = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
   const ticks = 5;
@@ -338,11 +339,18 @@ function renderChart() {
     s += `<line x1="${padL}" x2="${W - padR}" y1="${y}" y2="${y}" stroke="${border}" stroke-width="1"/>`;
     s += `<text x="${W - padR + 4}" y="${y + 3}" font-size="10" fill="${muted}">${Math.round(p / 1000)}k</text>`;
   }
-  for (let i = 0; i < n; i += Math.ceil(n / 5)) {
+  for (let i = 0; i < n; i += Math.ceil(n / (n <= 40 ? 4 : 5))) {
     const d = new Date(C[i][0]);
     s += `<text x="${X(i)}" y="${H - 6}" font-size="9.5" fill="${muted}" text-anchor="middle">${d.getUTCMonth() + 1}/${d.getUTCDate()}</text>`;
   }
-  (LATEST.levels || []).filter(l => l.strength >= 3 && l.price > lo && l.price < hi).slice(0, 6).forEach(l => {
+  // 關鍵價位線：只畫最強 4 條，且彼此至少隔 0.6 ATR，避免雜訊
+  const atrNow = LATEST.price.atr || (hi - lo) / 10;
+  const lvls = (LATEST.levels || []).filter(l => l.strength >= 3 && l.price > lo && l.price < hi)
+    .sort((a, b) => b.strength - a.strength);
+  const drawn = [];
+  lvls.forEach(l => {
+    if (drawn.length >= 4 || drawn.some(p => Math.abs(p - l.price) < 0.6 * atrNow)) return;
+    drawn.push(l.price);
     s += `<line x1="${padL}" x2="${W - padR}" y1="${Y(l.price)}" y2="${Y(l.price)}" stroke="${muted}" stroke-width="0.8" stroke-dasharray="2 4" opacity="0.7"/>`;
   });
   if (plan) {
@@ -392,7 +400,7 @@ function attachCrosshair(box) {
     const { X, n, padL, W, padR } = CHARTX;
     const plotW = W - padL - padR;
     const i = Math.max(0, Math.min(n - 1, Math.floor((px / rect.width * W - padL) / plotW * n)));
-    const c = LATEST.candles[i]; if (!c) return;
+    const c = CHARTX.candles[i]; if (!c) return;
     const d = new Date(c[0]);
     const chg = (c[4] / c[1] - 1) * 100;
     tip.hidden = false;
@@ -726,6 +734,17 @@ function tickCountdown() {
   if (ev) ev.textContent = v > 0 ? `⏳ 掛單剩 ${fmtDur(v)}` : "⌛ 掛單已過期（沒成交的單請撤掉）";
   if (ed) ed.textContent = d > 0 ? `⏰ 持倉時間上限剩 ${fmtDur(d)}` : "";
 }
+
+/* ---------------- K 線圖範圍切換 ---------------- */
+document.querySelectorAll("#range-seg button").forEach(b => {
+  b.classList.toggle("on", +b.dataset.days === CHART_DAYS);
+  b.addEventListener("click", () => {
+    CHART_DAYS = +b.dataset.days;
+    localStorage.setItem("chartDays", CHART_DAYS);
+    document.querySelectorAll("#range-seg button").forEach(x => x.classList.toggle("on", x === b));
+    renderChart();
+  });
+});
 
 /* ---------------- 頁籤 ---------------- */
 document.querySelectorAll("#nav button").forEach(b => {
