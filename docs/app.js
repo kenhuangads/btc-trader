@@ -86,6 +86,7 @@ function renderHero() {
   $("#hero").className = `card hero ${cls}`;
   $("#hero").innerHTML = `
     <div class="gauge-wrap">${gaugeSVG(S.score, LATEST.meta.params.score_threshold, S.direction)}</div>
+    <div class="hero-sub">綜合分數 ${S.score > 0 ? "+" : ""}${Math.round(S.score)}（出手門檻 ±${LATEST.meta.params.score_threshold}）</div>
     <div class="headline">${esc(S.headline || "")}</div>
     <div class="hero-sub">訊號日 ${LATEST.signal_date} · 收盤 ${fmt(LATEST.price.close)}
       <span class="${LATEST.price.chg_1d >= 0 ? "up" : "down"}">${LATEST.price.chg_1d > 0 ? "+" : ""}${LATEST.price.chg_1d}%</span></div>
@@ -99,7 +100,7 @@ function renderHero() {
 }
 
 function gaugeSVG(score, th, dir) {
-  const W = 340, H = 175, cx = 170, cy = 150, R = 118;
+  const W = 340, H = 198, cx = 170, cy = 158, R = 112;
   const green = css("--green"), red = css("--red"), muted = css("--muted"), card2 = css("--card2");
   const pt = (s, r) => {
     const a = (180 - (s + 100) * 0.9) * Math.PI / 180;
@@ -117,21 +118,17 @@ function gaugeSVG(score, th, dir) {
     const [x1, y1] = pt(t, R + 13), [x2, y2] = pt(t, R - 13);
     s += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${muted}" stroke-width="1.6"/>`;
   });
-  // 區域標籤
-  const [lx, ly] = pt(-72, R + 26), [rx, ry] = pt(72, R + 26), [mx, my] = pt(0, R + 24);
-  s += `<text x="${lx}" y="${ly}" font-size="12" fill="${red}" text-anchor="middle" font-weight="700">看空</text>`;
-  s += `<text x="${mx}" y="${my}" font-size="12" fill="${muted}" text-anchor="middle">休息</text>`;
-  s += `<text x="${rx}" y="${ry}" font-size="12" fill="${green}" text-anchor="middle" font-weight="700">看多</text>`;
-  // 指針
-  const sc = Math.max(-100, Math.min(100, score));
-  const [nx, ny] = pt(sc, R - 30);
+  // 區域標籤：休息在弧頂上方（留足空間）、看空/看多在弧的兩端下方
+  s += `<text x="${cx}" y="30" font-size="12" fill="${muted}" text-anchor="middle">休息區</text>`;
+  s += `<text x="${cx - R}" y="${cy + 26}" font-size="13" fill="${red}" text-anchor="middle" font-weight="700">看空</text>`;
+  s += `<text x="${cx + R}" y="${cy + 26}" font-size="13" fill="${green}" text-anchor="middle" font-weight="700">看多</text>`;
+  // 大字放在弧內上方，指針縮短、不與文字相交
   const ncol = dir === "LONG" ? green : dir === "SHORT" ? red : muted;
+  s += `<text x="${cx}" y="86" font-size="30" font-weight="900" fill="${ncol}" text-anchor="middle">${DIR[dir]}</text>`;
+  const sc = Math.max(-100, Math.min(100, score));
+  const [nx, ny] = pt(sc, R - 54);
   s += `<line x1="${cx}" y1="${cy}" x2="${nx}" y2="${ny}" stroke="${ncol}" stroke-width="4" stroke-linecap="round"/>`;
   s += `<circle cx="${cx}" cy="${cy}" r="7" fill="${ncol}"/>`;
-  // 大字
-  const word = DIR[dir];
-  s += `<text x="${cx}" y="${cy - 38}" font-size="30" font-weight="900" fill="${ncol}" text-anchor="middle">${word}</text>`;
-  s += `<text x="${cx}" y="${cy - 16}" font-size="12" fill="${muted}" text-anchor="middle">綜合分數 ${score > 0 ? "+" : ""}${Math.round(score)}（門檻 ±${th}）</text>`;
   return s + "</svg>";
 }
 
@@ -214,34 +211,37 @@ function renderLadder() {
   const Y = p => 14 + (hi - p) / (hi - lo) * (H - 28);
   LADDER = { lo, hi, Y, W, H };
 
+  const GUT = 88;                      // 右側價格專用欄（虛線不進入，文字永不被劃過）
+  const lineEnd = W - GUT;
   let s = `<svg class="ladder-svg" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
   zones.forEach(z => {
     const a = Math.max(lo, z.a === -Infinity ? lo : z.a), b = Math.min(hi, z.b === Infinity ? hi : z.b);
     if (b <= a) return;
-    s += `<rect x="0" y="${Y(b)}" width="${W}" height="${Y(a) - Y(b)}" fill="${z.col}" opacity="${z.op}" rx="8"/>`;
-    s += `<text x="${W - 8}" y="${Y(b) + 14}" font-size="10" fill="${z.col}" text-anchor="end" opacity=".9">${z.label}</text>`;
+    s += `<rect x="0" y="${Y(b)}" width="${lineEnd}" height="${Y(a) - Y(b)}" fill="${z.col}" opacity="${z.op}" rx="8"/>`;
+    s += `<text x="${lineEnd - 8}" y="${Y(b) + 14}" font-size="10" fill="${z.col}" text-anchor="end" opacity=".9">${z.label}</text>`;
   });
-  // 價位列（label 防重疊：由上而下最小間距 30px）
+  // 價位列（label 防重疊：由上而下最小間距 36px；文字與虛線保持垂直距離）
   rows.sort((a, b) => b.p - a.p);
   let lastY = -99;
   rows.forEach(r => {
     const yTrue = Y(r.p);
-    const y = Math.max(yTrue, lastY + 30);
+    const y = Math.max(yTrue, lastY + 36);
     lastY = y;
-    s += `<line x1="4" x2="${W - 4}" y1="${yTrue}" y2="${yTrue}" stroke="${r.col}" stroke-width="1.3" stroke-dasharray="6 4" opacity=".9"/>`;
-    if (Math.abs(y - yTrue) > 4) s += `<line x1="150" x2="150" y1="${yTrue}" y2="${y - 8}" stroke="${r.col}" stroke-width="1" opacity=".4"/>`;
-    s += `<text x="8" y="${y - 6}" font-size="12" font-weight="700" fill="${r.col}">${r.chip}</text>`;
-    if (r.sub) s += `<text x="8" y="${y + 8}" font-size="10.5" fill="${muted}">${r.sub}</text>`;
-    s += `<text x="${W - 8}" y="${y - 6}" font-size="13" font-weight="800" fill="${text}" text-anchor="end">${fmt(r.p)}</text>`;
-    s += `<text x="${W - 8}" y="${y + 8}" font-size="10" fill="${muted}" text-anchor="end" class="lv-dist" data-p="${r.p}">${distTxt(r.p, close)}</text>`;
+    s += `<line x1="4" x2="${lineEnd}" y1="${yTrue}" y2="${yTrue}" stroke="${r.col}" stroke-width="1.3" stroke-dasharray="6 4" opacity=".9"/>`;
+    if (Math.abs(y - yTrue) > 4) s += `<line x1="150" x2="150" y1="${yTrue}" y2="${y - 10}" stroke="${r.col}" stroke-width="1" opacity=".4"/>`;
+    s += `<text x="8" y="${y - 9}" font-size="12" font-weight="700" fill="${r.col}">${r.chip}</text>`;
+    if (r.sub) s += `<text x="8" y="${y + 15}" font-size="10.5" fill="${muted}">${r.sub}</text>`;
+    s += `<text x="${W - 8}" y="${y - 1}" font-size="13" font-weight="800" fill="${text}" text-anchor="end">${fmt(r.p)}</text>`;
+    s += `<text x="${W - 8}" y="${y + 13}" font-size="10" fill="${muted}" text-anchor="end" class="lv-dist" data-p="${r.p}">${distTxt(r.p, close)}</text>`;
   });
-  // 現價
+  // 現價：左右兩顆實心膠囊（畫在最上層，遇到相近價位也讀得清楚）
   const cy2 = Y(close);
   s += `<g id="ladder-now">
     <line x1="4" x2="${W - 4}" y1="${cy2}" y2="${cy2}" stroke="${text}" stroke-width="1.6"/>
-    <rect x="4" y="${cy2 - 10}" rx="6" width="76" height="20" fill="${text}"/>
-    <text x="42" y="${cy2 + 4}" font-size="11" font-weight="800" fill="${card}" text-anchor="middle">▶ 現價</text>
-    <text x="${W - 8}" y="${cy2 - 6}" font-size="11" font-weight="700" fill="${text}" text-anchor="end" id="ladder-now-p">${fmt(close)}</text>
+    <rect x="4" y="${cy2 - 10}" rx="6" width="74" height="20" fill="${text}"/>
+    <text x="41" y="${cy2 + 4}" font-size="11" font-weight="800" fill="${card}" text-anchor="middle">▶ 現價</text>
+    <rect x="${W - GUT + 4}" y="${cy2 - 10}" rx="6" width="${GUT - 8}" height="20" fill="${text}"/>
+    <text x="${W - GUT / 2}" y="${cy2 + 4}" font-size="11.5" font-weight="800" fill="${card}" text-anchor="middle" id="ladder-now-p">${fmt(close)}</text>
   </g>`;
   box.innerHTML = s + "</svg>";
 }
@@ -255,10 +255,11 @@ function updateLadderLive(p) {
   const { lo, hi, Y } = LADDER;
   if (p < lo || p > hi) { renderLadder(); return; }
   const y = Y(p);
-  const [line, rect, txt] = [g.children[0], g.children[1], g.children[2]];
+  const [line, lrect, ltxt, rrect] = [g.children[0], g.children[1], g.children[2], g.children[3]];
   line.setAttribute("y1", y); line.setAttribute("y2", y);
-  rect.setAttribute("y", y - 10); txt.setAttribute("y", y + 4);
-  const pl = $("#ladder-now-p"); if (pl) { pl.setAttribute("y", y - 6); pl.textContent = fmt(p); }
+  lrect.setAttribute("y", y - 10); ltxt.setAttribute("y", y + 4);
+  if (rrect) rrect.setAttribute("y", y - 10);
+  const pl = $("#ladder-now-p"); if (pl) { pl.setAttribute("y", y + 4); pl.textContent = fmt(p); }
   document.querySelectorAll(".lv-dist").forEach(el => { el.textContent = distTxt(+el.dataset.p, p); });
 }
 
