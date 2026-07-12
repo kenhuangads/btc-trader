@@ -8,11 +8,28 @@ from . import planner as P
 from .macro import macro_gate
 from .review import cooling_active
 
+H4_MS = DAY_MS // 6
+
+
+def drawdown_governor(trades: list[dict]) -> float:
+    """回撤保護：近 10 筆已結案累計 < -3R → 風險縮到 0.6 倍（隨窗口滾動自動恢復）。
+    專家共識（Tharp/Druckenmiller）：手感最差的時候部位要最小。"""
+    closed = sorted([t for t in trades if t["status"] == "closed" and t["r"] is not None],
+                    key=lambda x: x.get("exit_ts", 0))[-10:]
+    if len(closed) >= 5 and sum(t["r"] for t in closed) < -3.0:
+        return 0.6
+    return 1.0
+
 
 def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> dict:
     p = state["params"]
-    sig = F.compute_signal(D, t, state["weights"], h4=h4)
     ts_signal = int(D["ts"].iloc[t]) + DAY_MS
+    # 4H 資料因果切片：僅保留訊號時間點前已收盤的 4H K（回測與實盤同一條規則）
+    if h4 is not None and len(h4):
+        h4 = h4[h4["ts"] + H4_MS <= ts_signal]
+        if len(h4) < 80:
+            h4 = None
+    sig = F.compute_signal(D, t, state["weights"], h4=h4)
     macro = macro_gate(ts_signal)
     gates, direction = [], "FLAT"
 
@@ -53,11 +70,14 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
     if direction != "FLAT":
         conf = sig["confidence"]
         risk = p["risk_pct_base"]
-        if conf >= 80:
-            risk = min(p["risk_pct_base"] * 1.5, 2.0)
-        elif conf < 65:
-            risk = p["risk_pct_base"] * 0.5
-        risk = round(risk * risk_mult, 2)
+        if conf >= 75:
+            risk = min(p["risk_pct_base"] * 1.3, 2.0)
+        elif conf < 62:
+            risk = p["risk_pct_base"] * 0.7
+        gov = drawdown_governor(trades)
+        if gov < 1.0:
+            gates.append(f"回撤保護：近 10 筆累計虧損超過 3R → 風險降至 {gov:.0%}（恢復前縮小部位）")
+        risk = round(risk * risk_mult * gov, 2)
         plan = P.build_plan(direction, D, t, sig, state, touch, risk)
         if plan["rr_to_res"] is not None and plan["rr_to_res"] < 1.6:
             sig["confidence"] = max(30, sig["confidence"] - 12)

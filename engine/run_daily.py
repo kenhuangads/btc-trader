@@ -25,6 +25,7 @@ def condensed_trade(tr: dict) -> dict:
     return {"id": tr["id"], "date": tr["date"], "mode": tr["mode"],
             "direction": tr["direction"], "confidence": tr["confidence"], "score": tr["score"],
             "status": tr["status"], "r": tr["r"], "fees_r": tr["fees_r"],
+            "funding_r": tr.get("funding_r", 0.0),
             "mae_r": round(tr["mae_r"], 2), "mfe_r": round(tr["mfe_r"], 2),
             "avg_fill": round(avg, 1) if avg else None, "filled_w": round(fw, 2),
             "exit_ts": tr.get("exit_ts"), "lessons": tr["lessons"],
@@ -56,6 +57,7 @@ def make_headline(res: dict) -> str:
 def main() -> int:
     bootstrap_flag = "--bootstrap" in sys.argv
     state = jload(STATE / "model_state.json") or copy.deepcopy(OPT.DEFAULT_STATE)
+    OPT.ensure_defaults(state)
     trades = jload(STATE / "trades.json") or []
     factor_history = jload(STATE / "factor_history.json") or []
     touch = jload(STATE / "touch_probs.json") or {}
@@ -84,13 +86,17 @@ def main() -> int:
     log(f"日線主表 {len(D)} 天，最新收盤日 {ts_to_date(int(D['ts'].iloc[t]))}"
         f"（收盤 {float(D['close'].iloc[t]):,.0f}）")
 
+    funding_by_day = {int(ts): float(f) for ts, f in zip(D["ts"], D["funding"])
+                      if not np.isnan(f)}
+
     # ---------------- 首次啟動：回測建立基準 ----------------
     need_bootstrap = bootstrap_flag or (not trades and not factor_history)
     if need_bootstrap:
         log("啟動回測 bootstrap …")
         touch = OPT.touch_prob_table(D)
         state = copy.deepcopy(OPT.DEFAULT_STATE)
-        trades, factor_history = BT.run_backtest(D, state, touch)
+        trades, factor_history = BT.run_backtest(D, state, touch, h4=m["h4"],
+                                                 funding_by_day=funding_by_day)
         OPT.maybe_tune(state, trades, factor_history, D, now_ms(), force=True)
 
     # ---------------- 實盤在途單：以 1h K 精確重播 ----------------
@@ -98,7 +104,7 @@ def main() -> int:
     h1 = m["h1"][["ts", "open", "high", "low", "close"]]
     for tr in trades:
         if tr["status"] in ("pending", "open"):
-            R.process_trade(tr, h1, atr_by_day, state["params"])
+            R.process_trade(tr, h1, atr_by_day, state["params"], funding_by_day)
             if tr["status"] in ("closed", "cancelled"):
                 R.add_lessons(tr, D)
 
@@ -163,7 +169,9 @@ def main() -> int:
                     for r in D.tail(120)[["ts", "open", "high", "low", "close", "volume"]].itertuples(index=False)],
         "stats_mini": {"win_rate": stats_all["win_rate"], "expectancy_r": stats_all["expectancy_r"],
                        "fill_rate": stats_all["fill_rate"], "total_r": stats_all["total_r"],
-                       "n_closed": stats_all["n_closed"], "profit_factor": stats_all["profit_factor"]},
+                       "n_closed": stats_all["n_closed"], "profit_factor": stats_all["profit_factor"],
+                       "win_rate_ex_scratch": stats_all["win_rate_ex_scratch"],
+                       "scratch_n": stats_all["scratch_n"]},
         "meta": {"version": state["version"], "params": state["params"]},
     }
     jdump(latest, DATA / "latest.json")

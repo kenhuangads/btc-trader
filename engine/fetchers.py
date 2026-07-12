@@ -224,8 +224,12 @@ def bb_derivs(days: int, px: pd.DataFrame) -> dict:
 
 
 # ---------------------------------------------------------------- 統整
-def fetch_all(days_daily: int = 560) -> dict:
-    """回傳 {d, h4, h1, funding, oi, taker, lsr, src_klines, src_deriv}。"""
+def fetch_all(days_daily: int = 980) -> dict:
+    """回傳 {d, h4, h1, funding, oi, taker, lsr, src_klines, src_deriv}。
+
+    日線視窗 980 天：扣掉 240 天暖機後，回測樣本約 2 年（涵蓋多空循環各段）。
+    4H 抓 4500 根（約 750 天）讓回測期的 4H 結構因子與實盤口徑一致。
+    """
     d = h4 = h1 = None
     src_k = None
     for name, fn in (("binance", bn_klines), ("okx", okx_klines), ("bybit", bb_klines)):
@@ -233,7 +237,7 @@ def fetch_all(days_daily: int = 560) -> dict:
             iv = {"binance": ("1d", "4h", "1h"), "okx": ("1Dutc", "4H", "1H"),
                   "bybit": ("D", "240", "60")}[name]
             d = fn(iv[0], DAY_MS, days_daily)
-            h4 = fn(iv[1], DAY_MS // 6, 900)
+            h4 = fn(iv[1], DAY_MS // 6, 4500)
             h1 = fn(iv[2], DAY_MS // 24, 500)
             src_k = name
             log(f"K線來源: {name}（日線 {len(d)} 根）")

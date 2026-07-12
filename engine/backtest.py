@@ -13,7 +13,8 @@ from .util import DAY_MS, log, ts_to_date
 WARMUP = 240
 
 
-def run_backtest(D, state: dict, touch: dict) -> tuple[list[dict], list[dict]]:
+def run_backtest(D, state: dict, touch: dict, h4=None,
+                 funding_by_day: dict | None = None) -> tuple[list[dict], list[dict]]:
     trades: list[dict] = []
     factor_history: list[dict] = []
     atr_by_day = {int(ts): float(a) for ts, a in zip(D["ts"], D["atr"]) if not np.isnan(a)}
@@ -23,11 +24,11 @@ def run_backtest(D, state: dict, touch: dict) -> tuple[list[dict], list[dict]]:
         bar = D.iloc[[t]][bar_cols]
         for tr in trades:
             if tr["status"] in ("pending", "open"):
-                R.process_trade(tr, bar, atr_by_day, state["params"])
+                R.process_trade(tr, bar, atr_by_day, state["params"], funding_by_day)
                 if tr["status"] in ("closed", "cancelled"):
                     R.add_lessons(tr, D)
 
-        res = SG.decide(D, t, state, trades, touch, h4=None)
+        res = SG.decide(D, t, state, trades, touch, h4=h4)
         factor_history.append({"date": ts_to_date(res["signal_ts"]), "ts": int(D["ts"].iloc[t]),
                                "scores": {f["name"]: f["score"] for f in res["sig"]["factors"] if f["ok"]}})
         has_active = any(tr["status"] in ("pending", "open") for tr in trades)

@@ -305,8 +305,8 @@ def build_clusters(D, t, wicks) -> list[dict]:
         if v:
             raw.append({"price": v, "src": name})
     if t >= 1:
-        raw.append({"price": float(D["high"].iloc[t]), "src": "昨日高"})
-        raw.append({"price": float(D["low"].iloc[t]), "src": "昨日低"})
+        raw.append({"price": float(D["high"].iloc[t]), "src": "當日高"})
+        raw.append({"price": float(D["low"].iloc[t]), "src": "當日低"})
     for w in wicks:
         if not w["filled"]:
             raw.append({"price": w["mid"], "src": "影線50%"})
@@ -343,7 +343,9 @@ def compute_signal(D, t, weights: dict, h4=None) -> dict:
         pos = sum(1 for f in nonzero if f["score"] > 0)
         agree = max(pos, len(nonzero) - pos) / len(nonzero)
     missing = len(facs) - len(ok)
-    conf = 50 + 0.42 * abs(score) + 18 * (agree - 0.5) * 2 - 3 * missing
+    # 信心量程：門檻級分數(±20)≈60、強共振(±40)≈80、極端(±55)≈90，
+    # 讓「加碼(≥75)／減碼(<62)／反向平倉(≥70)」的分級門檻真正用得到
+    conf = 45 + 0.8 * abs(score) + 16 * (agree - 0.5) * 2 - 3 * missing
     conf = float(np.clip(conf, 30, 95))
     return {"score": round(float(score), 1), "confidence": round(conf, 0),
             "factors": facs, "agree": round(agree, 2), "missing": missing,

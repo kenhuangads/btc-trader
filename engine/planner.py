@@ -90,13 +90,16 @@ def build_plan(direction: str, D, t: int, sig: dict, state: dict,
     stop = avg_entry - sgn * dist
 
     # --- 止盈階梯與磁吸目標 ---
+    # frac 為「實際成交部位」的比例（復盤引擎按成交權重等比縮放，部分成交結構不變形）
+    tp1_r = p.get("tp1_r", 0.7)
+    tp2_r = round(tp1_r + 1.0, 2)
     tps = [
-        {"name": "TP1", "price": price_rnd(avg_entry + sgn * dist), "frac": 0.30, "r": 1,
-         "action": "平 30%，停損移至保本"},
-        {"name": "TP2", "price": price_rnd(avg_entry + sgn * 2 * dist), "frac": 0.30, "r": 2,
-         "action": "再平 30%，啟動移動停損"},
+        {"name": "TP1", "price": price_rnd(avg_entry + sgn * tp1_r * dist), "frac": 0.30, "r": tp1_r,
+         "action": "平 30%，停損移保本＋啟動移動停損"},
+        {"name": "TP2", "price": price_rnd(avg_entry + sgn * tp2_r * dist), "frac": 0.30, "r": tp2_r,
+         "action": "再平 30%，餘倉讓利潤奔跑"},
     ]
-    trail_txt = f"餘倉 40% 以 {p['trail_atr_mult']:.1f}×ATR 吊燈式移動停損讓利潤奔跑"
+    trail_txt = f"餘倉 40% 以 {p['trail_atr_mult']:.1f}×ATR 吊燈式移動停損讓利潤奔跑（TP1 後啟動）"
     targets = []
     if direction == "LONG":
         res = [c for c in clusters if c["price"] > avg_entry and c["strength"] >= 2][:3]
@@ -143,8 +146,10 @@ def build_plan(direction: str, D, t: int, sig: dict, state: dict,
     ts_signal = int(D["ts"].iloc[t]) + DAY_MS  # 訊號生效時間 = 該日K收盤
     scen_dir = "多" if direction == "LONG" else "空"
     scenarios = {
-        "main": f"價格回檔至第 1~2 檔掛單成交後於支撐止穩，先看 TP1(+1R) 移保本，趨勢延續則按階梯止盈讓利潤奔跑。",
+        "main": f"價格回檔至第 1~2 檔掛單成交後於支撐止穩，先看 TP1(+{tp1_r:g}R) 移保本，趨勢延續則按階梯止盈讓利潤奔跑。",
         "alt": f"若急殺/急拉直達第 3 檔（深水區，影線回補型成交），成本更優，仍按同一套停損停利執行。",
+        "stall": f"進場 {p.get('stagnation_days', 4)} 天仍無進展（浮盈未達 {p.get('stagnation_mfe_r', 0.35):.2f}R）"
+                 f"→ 開盤離場換下一次機會，不跟死行情耗。",
         "invalid": f"日線收盤{'跌破' if direction == 'LONG' else '站上'} {price_rnd(stop):,} 即結構破壞，"
                    f"做{scen_dir}邏輯失效，無條件離場不凹單。",
     }

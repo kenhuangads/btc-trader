@@ -24,6 +24,12 @@ DEFAULT_STATE = {
         "stop_max_atr": 2.2,
         "stop_min_atr": 1.0,
         "trail_atr_mult": 2.5,
+        "tp1_r": 0.7,               # TP1 距離（R 倍數）：對齊 7 日 MFE 分布 65-70 百分位；TP2 = TP1 + 1R
+        "trail_after": "tp1",       # 吊燈移動停損啟動點：tp1（預設）或 tp2
+        "ratchet_mfe_r": 0.6,       # 浮盈曾達此 R 數 → 觸發鎖利棘輪
+        "ratchet_lock_r": 0.25,     # 棘輪觸發後，停損上移到 -此 R 數
+        "stagnation_days": 5,       # 進場滿 N 天無進展 → 停滯出場
+        "stagnation_mfe_r": 0.35,   # 「無進展」定義：MFE 從未達此 R 數
         "risk_pct_base": 1.0,
         "score_threshold": 20,
         "confidence_floor": 55,
@@ -38,7 +44,15 @@ DEFAULT_STATE = {
 }
 
 
-def touch_prob_table(D, horizon_days: int = 2, lookback: int = 420) -> dict:
+def ensure_defaults(state: dict) -> None:
+    """舊版 state 檔補上新增參數/權重（引擎升級後向前相容）。"""
+    for k, v in DEFAULT_STATE["params"].items():
+        state.setdefault("params", {}).setdefault(k, v)
+    for k, v in DEFAULT_STATE["weights"].items():
+        state.setdefault("weights", {}).setdefault(k, v)
+
+
+def touch_prob_table(D, horizon_days: int = 2, lookback: int = 700) -> dict:
     """歷史觸價機率：收盤價 ±k×ATR 的限價單，在接下來 horizon 天內成交的頻率。"""
     lo = max(30, len(D) - lookback)
     offs = [round(x, 1) for x in np.arange(0.1, 2.6, 0.1)]
@@ -83,7 +97,10 @@ def factor_edges(factor_history: list[dict], D) -> dict:
             n += 1
             if (s > 0) == (fwd > 0):
                 hits += 1
-        edges[name] = {"edge": round(hits / n, 3) if n >= 25 else None, "n": n}
+        # 貝氏收縮：小樣本的命中率往 50% 拉（先驗 n0=20），避免權重追逐雜訊
+        n0 = 20
+        edges[name] = {"edge": round((hits + 0.5 * n0) / (n + n0), 3) if n >= 25 else None,
+                       "raw_edge": round(hits / n, 3) if n else None, "n": n}
     return edges
 
 
@@ -148,8 +165,9 @@ def maybe_tune(state: dict, trades: list[dict], factor_history: list[dict], D,
             log_change("停損緩衝(ATR)", b_old, b_new, f"{frac:.0%} 的虧損疑似被插針掃損 → 加寬停損")
             state["params"]["stop_buffer_atr"] = round(b_new, 2)
 
-    # 4) 分數門檻（交易頻率 × 勝率平衡）
-    closed_only = [t for t in closed if t["status"] == "closed" and t["r"] is not None][-30:]
+    # 4) 分數門檻（交易頻率 × 勝率平衡；排除 ±0.1R 平手單，避免零和出場稀釋訊號）
+    closed_only = [t for t in closed
+                   if t["status"] == "closed" and t["r"] is not None and abs(t["r"]) > 0.1][-30:]
     if len(closed_only) >= 15:
         wr = sum(1 for t in closed_only if t["r"] > 0) / len(closed_only)
         th_old = state["params"]["score_threshold"]

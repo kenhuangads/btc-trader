@@ -280,6 +280,9 @@ function renderCalcMaybe() {
     <div class="calc-out" id="calc-out"></div>
     <div id="calc-liq-warn" class="hint-block"></div>
     <div class="countdown" id="calc-note"></div>
+    <div class="card-title" style="margin:14px 0 6px">這筆的可能結局 <span class="hint">照計畫執行時，各種劇本大約賺賠多少</span></div>
+    <div id="calc-payoff"></div>
+    <div id="calc-funding" class="hint-block"></div>
   </div>`;
   const recompute = () => {
     const eq = +$("#calc-eq").value || 0, risk = +$("#calc-risk").value || 0;
@@ -313,6 +316,32 @@ function renderCalcMaybe() {
       "（提醒：改槓桿不會改變倉位大小與賺賠，只改變鎖住的保證金和強平價）";
     $("#calc-note").textContent =
       `逐檔下單量：${plan.entries.map((e, i) => `第${i + 1}檔 ${(qty * e.w).toFixed(4)} BTC`).join("、")}（逐倉模式估算）`;
+
+    // 可能結局試算（以全數成交計；部分成交時金額等比縮小，結構不變）
+    const r1 = plan.tps[0]?.r ?? 0.7, r2 = plan.tps[1]?.r ?? (r1 + 1);
+    const runnerR = 0.3 * r1 + 0.3 * r2 + 0.4 * 3;
+    const money = r => {
+      const v = r * riskUsd;
+      return `<b class="${v >= 0.5 ? "up" : v <= -0.5 ? "down" : ""}">${v >= 0 ? "+" : "−"}${fmt(Math.abs(v), 0)}</b>`;
+    };
+    $("#calc-payoff").innerHTML = [
+      ["🛑 看錯：碰到停損", "全部出場，虧損固定在計畫內", -1, money(-1)],
+      ["😐 沒行情：停滯/到期出場", "進場 5 天沒進展就先離場，賺賠約打平", 0, `<b>≈ 0</b>`],
+      [`🎯 到目標1（+${r1}R）後回落`, "先落袋 30%、剩餘保本出場，小賺", 0.3 * r1, money(0.3 * r1)],
+      [`🎯🎯 到目標2（+${r2}R）後回落`, "落袋 60%、剩餘保本出場", 0.3 * r1 + 0.3 * r2, money(0.3 * r1 + 0.3 * r2)],
+      [`🚀 趨勢展開（尾倉假設跑到 +3R）`, "移動停損讓 40% 尾倉奔跑（示意，上不封頂）", runnerR, money(runnerR)],
+    ].map(([t, sub, _r, m]) => `
+      <div class="kv"><span>${t}<br><small style="font-size:11px">${sub}</small></span>
+      <span style="text-align:right;flex:none">${m}<br><small style="font-size:11px;color:var(--muted)">${_r > 0 ? "+" : _r < 0 ? "−" : "±"}${Math.abs(_r).toFixed(2)}R</small></span></div>`).join("");
+
+    // 資金費率持倉成本（8h 費率 ×3 ≈ 每日；多單付正費率、空單收正費率）
+    const f8 = LATEST.price.funding;
+    if (f8 != null) {
+      const daily = f8 * 3 * notional * (plan.direction === "LONG" ? 1 : -1);
+      const word = daily > 0 ? `約付 ${fmt(Math.abs(daily), 1)}` : `約收 ${fmt(Math.abs(daily), 1)}`;
+      $("#calc-funding").textContent =
+        `💰 資金費率：目前 8 小時 ${(f8 * 100).toFixed(4)}%，此倉位每日${word} USDT（費率隨時變動，僅供概估；復盤統計已計入）`;
+    } else $("#calc-funding").textContent = "";
   };
   ["calc-eq", "calc-risk", "calc-lev"].forEach(id => $("#" + id).addEventListener("input", recompute));
   recompute();
@@ -371,6 +400,19 @@ function renderChart() {
   (LATEST.wicks || []).forEach(w => {
     if (w.mid > lo && w.mid < hi) s += `<circle cx="${W - padR - 6}" cy="${Y(w.mid)}" r="3" fill="${accent}" opacity="0.9"/>`;
   });
+  // EMA20/50 疊圖（用全部 120 根算，只畫顯示範圍，避免視窗切換造成暖機偏移）
+  const allC = LATEST.candles, off = allC.length - n;
+  const emaPath = (span, col, dash) => {
+    const k = 2 / (span + 1);
+    let e = allC[0][4], d = "";
+    allC.forEach((c2, j) => {
+      e = j ? c2[4] * k + e * (1 - k) : e;
+      const i = j - off;
+      if (i >= 0 && e > lo && e < hi) d += (d ? " L" : "M") + `${X(i).toFixed(1)},${Y(e).toFixed(1)}`;
+    });
+    return d ? `<path d="${d}" fill="none" stroke="${col}" stroke-width="1.3" ${dash ? 'stroke-dasharray="1 3"' : ""} opacity=".85"/>` : "";
+  };
+  s += emaPath(20, accent, false) + emaPath(50, css("--amber"), true);
   const bw = Math.max(1.6, (W - padL - padR) / n * 0.62);
   C.forEach((c, i) => {
     const [, o, h, l, cl] = c, up = cl >= o, col = up ? green : red, x = X(i);
@@ -385,6 +427,8 @@ function renderChart() {
   $("#chart-legend").innerHTML = `
     <span><i style="background:${green}"></i>上漲日</span>
     <span><i style="background:${red}"></i>下跌日</span>
+    <span><i style="background:${accent}"></i>EMA20</span>
+    <span><i style="background:${css("--amber")}"></i>EMA50</span>
     <span><i style="background:${muted}"></i>關鍵價位</span>
     <span><i style="background:${accent};height:8px;width:8px;border-radius:99px"></i>影線磁吸</span>`;
   attachCrosshair(box);
@@ -457,12 +501,14 @@ function renderDiscipline() {
   $("#discipline").innerHTML = `
     <div class="card-title">保命規則（系統強制執行）</div>
     <div class="pill-row">
-      <span class="pill">🛡 一筆最多虧 ${p.risk_pct_base * 1.5}%</span>
+      <span class="pill">🛡 一筆最多虧 ${Math.min(p.risk_pct_base * 1.3, 2)}%</span>
       <span class="pill">⚖️ 槓桿最高 ${p.max_leverage} 倍</span>
       <span class="pill">🧊 連虧 2 筆休息 1 天</span>
       <span class="pill">📅 大事件前不進場</span>
       <span class="pill">⏰ 最多抱 ${p.max_hold_days} 天</span>
+      <span class="pill">⏳ ${p.stagnation_days} 天沒進展先離場</span>
       <span class="pill">🔒 到目標1後這筆穩不虧</span>
+      <span class="pill">📉 連續回撤自動降風險</span>
     </div>
     <div style="font-size:12px;color:var(--muted);margin-top:10px">
       至今 ${m.n_closed} 筆結案 · 勝率 ${pct(m.win_rate)} · 平均每筆 ${fmtR(m.expectancy_r)} · 掛單成交率 ${pct(m.fill_rate)}
@@ -480,14 +526,19 @@ function renderReview() {
     b.classList.toggle("on", b.dataset.mode === MODE);
   });
   const S = MODE === "all" ? REVIEW.stats_all : MODE === "live" ? REVIEW.stats_live : REVIEW.stats_backtest;
+  const wrSub = S.win_rate_ex_scratch != null
+    ? `去±0.1R平手後 ${pct(S.win_rate_ex_scratch)}` : "贏的比例";
+  const sampleWarn = (S.n_closed || 0) < 30
+    ? `<div style="grid-column:1/-1;font-size:11px;color:var(--amber);text-align:center">⚠ 此範圍僅 ${S.n_closed || 0} 筆結案樣本，統計噪音大，數字僅供參考</div>` : "";
   $("#kpis").innerHTML = [
-    ["勝率", pct(S.win_rate), "贏的比例", S.win_rate >= .5 ? "up" : ""],
+    ["勝率", pct(S.win_rate), wrSub, S.win_rate >= .5 ? "up" : ""],
     ["期望值", fmtR(S.expectancy_r), "每筆平均賺賠", (S.expectancy_r || 0) > 0 ? "up" : "down"],
     ["盈虧比", S.profit_factor ?? "—", "總賺 ÷ 總虧", (S.profit_factor || 0) >= 1.5 ? "up" : ""],
     ["成交率", pct(S.fill_rate), "掛單有進場的比例", ""],
     ["累積", fmtR(S.total_r), "總成績", (S.total_r || 0) > 0 ? "up" : "down"],
     ["最大回撤", fmtR(S.max_dd_r), "最慘的連虧", "down"],
   ].map(([k, v, sub, c]) => `<div class="kpi"><b class="${c}">${v}</b><span><b style="font-size:11px;display:inline">${k}</b><br>${sub}</span></div>`).join("") +
+    sampleWarn +
     `<div style="grid-column:1/-1;font-size:11px;color:var(--muted);text-align:center">R = 一筆願意虧的錢。賺 +2R = 賺到風險額的 2 倍</div>`;
   renderRBars(); renderEquity();
 
@@ -553,7 +604,11 @@ function tradeCard(t, isOpen) {
     : t.status === "cancelled" ? "沒等到價（未進場）" : "已結案";
   const modeChip = t.mode === "backtest" ? `<span class="badge badge-slate">回測</span>` : `<span class="badge badge-green">實盤</span>`;
   const exits = (t.exits || []).map(e => {
-    const rn = { tp1: "🎯目標1", tp2: "🎯目標2", stop: "🛑停損", be_stop: "保本出場", trail_stop: "移動停損", time: "到期平倉", reverse_signal: "反向訊號離場" }[e.reason] || e.reason;
+    const rn = {
+      tp1: "🎯目標1", tp2: "🎯目標2", stop: "🛑停損", be_stop: "保本出場",
+      trail_stop: "移動停損", time: "到期平倉", reverse_signal: "反向訊號離場",
+      stagnation: "⏳停滯出場(無進展)", protect_stop: "🔒鎖利停損",
+    }[e.reason] || e.reason;
     return `${rn} @ ${fmt(e.price)}（${Math.round(e.frac * 100)}%）`;
   }).join("；");
   return `<details class="trade" ${isOpen ? "open" : ""}>
@@ -569,6 +624,7 @@ function tradeCard(t, isOpen) {
       <div class="kv"><span>停損${isOpen ? "（目前）" : ""}</span><b>${fmt(isOpen ? t.stop_now : t.plan.stop)}</b></div>
       ${exits ? `<div class="kv"><span>出場</span><b style="font-weight:500;font-size:12.5px">${exits}</b></div>` : ""}
       <div class="kv"><span>過程中最大浮盈 / 最痛回檔</span><b><span class="up">${fmtR(t.mfe_r)}</span> / <span class="down">${fmtR(t.mae_r)}</span></b></div>
+      ${t.funding_r && Math.abs(t.funding_r) >= 0.005 ? `<div class="kv"><span>持倉期間資金費率</span><b class="${t.funding_r > 0 ? "up" : "down"}">${fmtR(t.funding_r)}</b></div>` : ""}
       <div class="kv"><span>風險 / 槓桿</span><b>${t.plan.risk_pct}% / ${t.plan.leverage}x</b></div>
       ${(t.lessons || []).map(l => `<span class="lesson">📝 ${esc(l)}</span>`).join("")}
     </div>
@@ -636,7 +692,10 @@ function renderSystem() {
     ["entry_offsets_atr", "掛單深度（ATR 倍數）", v => v.map(x => x.toFixed(2)).join(" / ")],
     ["entry_depth_mult", "深度倍率（優化器調整）", v => "×" + v],
     ["stop_buffer_atr", "停損緩衝（ATR）", v => v],
-    ["trail_atr_mult", "移動停損（ATR）", v => v + "×"],
+    ["tp1_r", "第一目標距離", v => "+" + v + "R（對齊 7 日行情空間分布）"],
+    ["trail_atr_mult", "移動停損（ATR）", v => v + "×（TP1 後啟動）"],
+    ["ratchet_mfe_r", "鎖利棘輪", v => `浮盈 ${v}R 後，停損上移到 −${P.ratchet_lock_r}R`],
+    ["stagnation_days", "停滯出場", v => `${v} 天無進展（<${P.stagnation_mfe_r}R）就離場`],
     ["risk_pct_base", "基準單筆風險", v => v + "%"],
     ["score_threshold", "出手分數門檻", v => "±" + v],
     ["confidence_floor", "把握度門檻", v => v],
@@ -649,13 +708,14 @@ function renderSystem() {
     `<div class="hint" style="margin-top:6px">模型版本 v${OPT.version} · 最近調參 ${OPT.tuned_at || "—"}</div>`;
 
   $("#philosophy").innerHTML = [
-    ["大賺小賠的結構", "停損固定小（1~2% 帳戶風險），獲利用「目標1保本 → 目標2收割 → 移動停損讓利潤奔跑」拉長右尾。虧損永遠是計畫內的小數字，獲利上不封頂。"],
+    ["大賺小賠的結構", "停損固定小（1~2% 帳戶風險）；第一目標對齊行情實際給的空間（7 日 MFE 分布 65-70 百分位）先落袋 30% 並保本，第二目標再收 30%，餘下 40% 用移動停損讓利潤奔跑。部分成交時各比例等比縮放，結構永不變形。"],
+    ["浮盈不變虧、死單不戀戰", "浮盈曾達 0.6R 的單，停損自動上移到 −0.25R（鎖利棘輪）；進場 5 天毫無進展直接離場（停滯出場）——資金與注意力留給會動的行情。"],
     ["高掛單成功率的來源", "掛單不追價：吸附在支撐/壓力群前緣，配合歷史觸價機率選深度。成交率與成本是蹺蹺板，優化器依近 20 筆成交率自動調整深度。"],
     ["逆向與擁擠度（GCR 反身性）", "資金費率極端分位＝人群擁擠訊號。空頭付費增倉但價格拒跌＝軋空燃料；多頭狂熱滯漲＝多殺多前兆。在共識最擁擠處找結構脆弱點。"],
     ["訂單流驗證（OI×CVD）", "突破要有新資金（OI↑）與主動買盤（CVD↑）共振才是真突破；價漲量縮、OI 下滑的突破視為誘多，不追。"],
     ["影線磁吸（CrypNuevo）", "流動性真空造成的長影線，市場傾向回補 50%。未回補影線是進場埋伏區與止盈磁吸目標。"],
-    ["紀律鐵律", "連續 2 次停損強制冷卻 1 日（防報復性交易）；FOMC/CPI/非農前 48h 降槓桿、24h 內不開新倉；持倉最長 7 天，到期平倉不戀戰；邏輯破壞無條件離場不凹單。"],
-    ["為何是模擬追蹤", "本系統輸出「推薦與復盤」，不自動下單。所有統計以保守規則模擬（同棒先進後損、含手續費滑價），寧可低估不高估。"],
+    ["紀律鐵律", "連續 2 次實質停損強制冷卻 1 日（防報復性交易）；近 10 筆累虧超過 3R 自動降風險到 6 成（回撤時部位最小）；FOMC/CPI/非農前 48h 降槓桿、24h 內不開新倉；持倉最長 7 天；邏輯破壞無條件離場不凹單。"],
+    ["為何是模擬追蹤", "本系統輸出「推薦與復盤」，不自動下單。所有統計以保守規則模擬（同棒先進後損、不計新成交當根止盈、含手續費滑價與資金費率），寧可低估不高估。"],
   ].map(([t, c]) => `<details class="phil"><summary>${t}</summary><p>${c}</p></details>`).join("");
 
   $("#about").innerHTML = `
