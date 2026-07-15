@@ -26,6 +26,7 @@ _STOP_REASON = {"init": "stop", "ratchet": "protect_stop", "be": "be_stop", "tra
 def new_trade(plan: dict, sig: dict, mode: str) -> dict:
     return {"id": f"{ts_to_date(plan['signal_ts'])}-{plan['direction']}",
             "date": ts_to_date(plan["signal_ts"]), "mode": mode,
+            "tier": plan.get("tier", "standard"),
             "direction": plan["direction"], "confidence": sig["confidence"],
             "score": sig["score"], "plan": plan,
             "status": "pending", "fills": [], "exits": [],
@@ -273,7 +274,19 @@ def compute_stats(trades: list[dict]) -> dict:
                           "avg_r": round(float(np.mean([t['r'] for t in seg])), 2)})
     stop_hunted = sum(1 for t in closed if any("插針掃損" in l for l in t["lessons"]))
     missed = sum(1 for t in cancelled if any("錯過行情" in l for l in t["lessons"]))
+    tiers = {}
+    for tier in ("standard", "scout"):
+        seg = [t for t in closed if t.get("tier", "standard") == tier]
+        seg_done = [t for t in done if t.get("tier", "standard") == tier]
+        if seg_done:
+            tiers[tier] = {
+                "n_signals": len(seg_done), "n_closed": len(seg),
+                "win_rate": round(sum(1 for t in seg if t["r"] > 0) / len(seg), 2) if seg else None,
+                "expectancy_r": round(float(np.mean([t["r"] for t in seg])), 3) if seg else None,
+                "total_r": round(float(np.sum([t["r"] for t in seg])), 2) if seg else 0.0,
+            }
     return {
+        "tiers": tiers,
         "n_signals": len(done), "n_closed": len(closed), "n_cancelled": len(cancelled),
         "fill_rate": round(fill_rate, 3) if fill_rate is not None else None,
         "rung_fill_rates": rung_fills,

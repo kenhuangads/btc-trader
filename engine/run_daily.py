@@ -23,6 +23,7 @@ def condensed_trade(tr: dict) -> dict:
     plan = tr["plan"]
     avg, fw = R._avg_fill(tr)
     return {"id": tr["id"], "date": tr["date"], "mode": tr["mode"],
+            "tier": tr.get("tier", "standard"),
             "direction": tr["direction"], "confidence": tr["confidence"], "score": tr["score"],
             "status": tr["status"], "r": tr["r"], "fees_r": tr["fees_r"],
             "funding_r": tr.get("funding_r", 0.0),
@@ -41,10 +42,13 @@ def make_headline(res: dict) -> str:
     """給新手看的一句白話結論。"""
     d = res["direction"]
     gates = " ".join(res["gates"])
+    scout = res.get("tier") == "scout"
     if d == "LONG":
-        return "偏多佈局：在下方掛限價單等回檔便宜接，跌破停損就認錯出場"
+        return ("輕倉試探偏多（半倉）：訊號夠好但未到滿分，用一半風險掛單等回檔" if scout
+                else "偏多佈局：在下方掛限價單等回檔便宜接，跌破停損就認錯出場")
     if d == "SHORT":
-        return "偏空佈局：在上方掛限價單等反彈再空，突破停損就認錯出場"
+        return ("輕倉試探偏空（半倉）：訊號夠好但未到滿分，用一半風險掛單等反彈" if scout
+                else "偏空佈局：在上方掛限價單等反彈再空，突破停損就認錯出場")
     if "冷卻" in gates:
         return "連續虧損冷卻中：今天強制休息一天，防止報復性交易"
     if "重大事件" in gates:
@@ -117,21 +121,28 @@ def main() -> int:
                                "scores": {f["name"]: f["score"] for f in sig["factors"] if f["ok"]}})
         factor_history = factor_history[-500:]
 
-    has_active = any(tr["status"] in ("pending", "open") for tr in trades)
+    active = [tr for tr in trades if tr["status"] in ("pending", "open")]
     already_today = any(tr["date"] == signal_date for tr in trades)
     position_note = None
-    if res["direction"] != "FLAT" and not has_active and not already_today:
-        trades.append(R.new_trade(plan, sig, "live"))
-        log(f"新增推薦單：{res['direction']} 信心 {sig['confidence']:.0f}")
-    elif res["direction"] != "FLAT" and has_active:
-        active = next(tr for tr in trades if tr["status"] in ("pending", "open"))
-        if active["direction"] != res["direction"] and sig["confidence"] >= 70:
-            active["force_exit"] = True
-            position_note = f"出現高信心反向訊號 → 在途 {active['direction']} 單將於下一根開盤離場"
-        elif active["direction"] == res["direction"]:
-            position_note = "同向訊號但已有在途部位 → 不重複開倉（金字塔加倉請手動評估：僅在浮盈 ≥1R 時以半倉加）"
-        else:
-            position_note = "反向訊號信心不足 70 → 在途部位續抱原計畫"
+    if res["direction"] != "FLAT":
+        tier_label = "試探" if res["tier"] == "scout" else "標準"
+        slot_taken = any(tr.get("tier", "standard") == res["tier"] for tr in active)
+        if not slot_taken and not already_today:
+            trades.append(R.new_trade(plan, sig, "live"))
+            log(f"新增推薦單：{res['direction']}（{tier_label}單）信心 {sig['confidence']:.0f}")
+        elif slot_taken:
+            same = next(tr for tr in active if tr.get("tier", "standard") == res["tier"])
+            if same["direction"] == res["direction"]:
+                position_note = f"{tier_label}倉位已有同向在途部位 → 不重複開倉"
+            elif sig["confidence"] < 70:
+                position_note = f"{tier_label}倉位有反向部位、反向訊號信心不足 70 → 續抱原計畫"
+        # 高信心反向訊號 → 所有反向在倉單提前離場（跨層級）
+        if sig["confidence"] >= 70:
+            for tr in active:
+                if tr["status"] == "open" and tr["direction"] != res["direction"]:
+                    tr["force_exit"] = True
+                    position_note = ((position_note + "；") if position_note else "") + \
+                        f"高信心反向訊號 → 在途 {tr['direction']} 單將於下一根開盤離場"
 
     # ---------------- 迭代優化 ----------------
     tune_logs = OPT.maybe_tune(state, trades, factor_history, D, now_ms())
@@ -157,6 +168,7 @@ def main() -> int:
                   "funding": (float(D["funding"].iloc[t]) if not np.isnan(D["funding"].iloc[t]) else None),
                   "oi": (float(D["oi"].iloc[t]) if not np.isnan(D["oi"].iloc[t]) else None)},
         "signal": {"direction": res["direction"], "score": sig["score"],
+                   "tier": res.get("tier"),
                    "headline": make_headline(res),
                    "confidence": sig["confidence"], "agree": sig["agree"],
                    "factors": [{**f, "weight": state["weights"].get(f["name"], 1.0)} for f in sig["factors"]],

@@ -83,11 +83,16 @@ function renderHero() {
   if (S.gates?.length) notes += S.gates.map(g => `<li class="gate">${esc(g)}</li>`).join("");
   if (S.direction === "FLAT" && S.watch?.length) notes += S.watch.map(w => `<li>${esc(w)}</li>`).join("");
   if (S.position_note) notes += `<li class="gate">${esc(S.position_note)}</li>`;
-  const floor = LATEST.meta.params.confidence_floor;
+  const P = LATEST.meta.params;
+  const floor = S.tier === "scout" ? (P.scout_conf_floor ?? 48) : P.confidence_floor;
+  const tierBadge = S.tier === "scout"
+    ? `<span class="badge badge-amber">🔍 試探單 · 風險減半</span>`
+    : S.tier === "standard" ? `<span class="badge badge-green">⭐ 標準單 · 全額風險</span>` : "";
   $("#hero").className = `card hero ${cls}`;
   $("#hero").innerHTML = `
-    <div class="gauge-wrap">${gaugeSVG(S.score, LATEST.meta.params.score_threshold, S.direction)}</div>
-    <div class="hero-sub">綜合分數 ${S.score > 0 ? "+" : ""}${Math.round(S.score)}（出手門檻 ±${LATEST.meta.params.score_threshold}）</div>
+    <div class="gauge-wrap">${gaugeSVG(S.score, P.score_threshold, S.direction, P.scout_enabled ? P.scout_threshold : null)}</div>
+    <div class="hero-sub">綜合分數 ${S.score > 0 ? "+" : ""}${Math.round(S.score)}（試探門檻 ±${P.scout_threshold ?? "—"} · 標準門檻 ±${P.score_threshold}）</div>
+    ${tierBadge ? `<div style="margin:6px 0 2px">${tierBadge}</div>` : ""}
     <div class="headline">${esc(S.headline || "")}</div>
     <div class="hero-sub">訊號日 ${LATEST.signal_date} · 收盤 ${fmt(LATEST.price.close)}
       <span class="${LATEST.price.chg_1d >= 0 ? "up" : "down"}">${LATEST.price.chg_1d > 0 ? "+" : ""}${LATEST.price.chg_1d}%</span></div>
@@ -100,20 +105,31 @@ function renderHero() {
     ${notes ? `<ul class="hero-notes">${notes}</ul>` : ""}`;
 }
 
-function gaugeSVG(score, th, dir) {
+function gaugeSVG(score, th, dir, scoutTh) {
   const W = 340, H = 198, cx = 170, cy = 158, R = 112;
   const green = css("--green"), red = css("--red"), muted = css("--muted"), card2 = css("--card2");
   const pt = (s, r) => {
     const a = (180 - (s + 100) * 0.9) * Math.PI / 180;
     return [cx + r * Math.cos(a), cy - r * Math.sin(a)];
   };
-  const arc = (s1, s2, col, w) => {
+  const arc = (s1, s2, col, w, op = 1) => {
     const [x1, y1] = pt(s1, R), [x2, y2] = pt(s2, R);
     return `<path d="M${x1.toFixed(1)},${y1.toFixed(1)} A${R},${R} 0 0 1 ${x2.toFixed(1)},${y2.toFixed(1)}"
-      fill="none" stroke="${col}" stroke-width="${w}" stroke-linecap="butt"/>`;
+      fill="none" stroke="${col}" stroke-width="${w}" stroke-opacity="${op}" stroke-linecap="butt"/>`;
   };
   let s = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
-  s += arc(-100, -th, red, 20) + arc(-th, th, card2, 20) + arc(th, 100, green, 20);
+  if (scoutTh && scoutTh < th) {
+    // 五區：深色=標準單、淺色=試探單（半倉）、中間=休息
+    s += arc(-100, -th, red, 20) + arc(-th, -scoutTh, red, 20, .35)
+      + arc(-scoutTh, scoutTh, card2, 20)
+      + arc(scoutTh, th, green, 20, .35) + arc(th, 100, green, 20);
+    [-scoutTh, scoutTh].forEach(t => {
+      const [x1, y1] = pt(t, R + 10), [x2, y2] = pt(t, R - 10);
+      s += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${muted}" stroke-width="1.2" opacity=".7"/>`;
+    });
+  } else {
+    s += arc(-100, -th, red, 20) + arc(-th, th, card2, 20) + arc(th, 100, green, 20);
+  }
   // 門檻刻度
   [-th, th].forEach(t => {
     const [x1, y1] = pt(t, R + 13), [x2, y2] = pt(t, R - 13);
@@ -121,6 +137,11 @@ function gaugeSVG(score, th, dir) {
   });
   // 區域標籤：休息在弧頂上方（留足空間）、看空/看多在弧的兩端下方
   s += `<text x="${cx}" y="30" font-size="12" fill="${muted}" text-anchor="middle">休息區</text>`;
+  if (scoutTh && scoutTh < th) {
+    const [lx2, ly2] = pt(-(scoutTh + th) / 2, R + 24), [rx2, ry2] = pt((scoutTh + th) / 2, R + 24);
+    s += `<text x="${lx2}" y="${ly2}" font-size="10.5" fill="${red}" opacity=".8" text-anchor="middle">試探</text>`;
+    s += `<text x="${rx2}" y="${ry2}" font-size="10.5" fill="${green}" opacity=".8" text-anchor="middle">試探</text>`;
+  }
   s += `<text x="${cx - R}" y="${cy + 26}" font-size="13" fill="${red}" text-anchor="middle" font-weight="700">看空</text>`;
   s += `<text x="${cx + R}" y="${cy + 26}" font-size="13" fill="${green}" text-anchor="middle" font-weight="700">看多</text>`;
   // 大字放在弧內上方，指針縮短、不與文字相交
@@ -498,6 +519,12 @@ function renderFactors() {
 /* ---------------- 紀律卡 ---------------- */
 function renderDiscipline() {
   const p = LATEST.meta.params, m = LATEST.stats_mini;
+  const cut = Date.now() - 30 * 86400e3;
+  const recent = (REVIEW?.trades || []).filter(t => new Date(t.date + "T00:00:00Z").getTime() >= cut);
+  const nStd = recent.filter(t => t.tier !== "scout").length, nSc = recent.filter(t => t.tier === "scout").length;
+  const cadence = recent.length
+    ? `近 30 天出手 ${recent.length} 次（標準 ${nStd}／試探 ${nSc}）· `
+    : "";
   $("#discipline").innerHTML = `
     <div class="card-title">保命規則（系統強制執行）</div>
     <div class="pill-row">
@@ -511,7 +538,7 @@ function renderDiscipline() {
       <span class="pill">📉 連續回撤自動降風險</span>
     </div>
     <div style="font-size:12px;color:var(--muted);margin-top:10px">
-      至今 ${m.n_closed} 筆結案 · 勝率 ${pct(m.win_rate)} · 平均每筆 ${fmtR(m.expectancy_r)} · 掛單成交率 ${pct(m.fill_rate)}
+      ${cadence}至今 ${m.n_closed} 筆結案 · 勝率 ${pct(m.win_rate)} · 平均每筆 ${fmtR(m.expectancy_r)} · 掛單成交率 ${pct(m.fill_rate)}
     </div>`;
 }
 
@@ -603,6 +630,7 @@ function tradeCard(t, isOpen) {
   const status = isOpen ? (t.status === "pending" ? "⏳ 掛單中" : "🟢 持倉中")
     : t.status === "cancelled" ? "沒等到價（未進場）" : "已結案";
   const modeChip = t.mode === "backtest" ? `<span class="badge badge-slate">回測</span>` : `<span class="badge badge-green">實盤</span>`;
+  const tierChip = t.tier === "scout" ? `<span class="badge badge-amber">試探·半倉</span>` : "";
   const exits = (t.exits || []).map(e => {
     const rn = {
       tp1: "🎯目標1", tp2: "🎯目標2", stop: "🛑停損", be_stop: "保本出場",
@@ -614,7 +642,7 @@ function tradeCard(t, isOpen) {
   return `<details class="trade" ${isOpen ? "open" : ""}>
     <summary>
       <span class="t-dir ${dirCls}">${DIR[t.direction]}</span>
-      <span class="t-date">${t.date} ${modeChip} <span class="hint">${status}</span></span>
+      <span class="t-date">${t.date} ${modeChip}${tierChip} <span class="hint">${status}</span></span>
       <span class="t-r" style="color:${rCol}">${t.status === "cancelled" ? "—" : fmtR(t.r)}</span>
     </summary>
     <div class="t-body">
@@ -697,7 +725,9 @@ function renderSystem() {
     ["ratchet_mfe_r", "鎖利棘輪", v => `浮盈 ${v}R 後，停損上移到 −${P.ratchet_lock_r}R`],
     ["stagnation_days", "停滯出場", v => `${v} 天無進展（<${P.stagnation_mfe_r}R）就離場`],
     ["risk_pct_base", "基準單筆風險", v => v + "%"],
-    ["score_threshold", "出手分數門檻", v => "±" + v],
+    ["score_threshold", "標準單分數門檻", v => "±" + v],
+    ["scout_threshold", "試探單分數門檻", v => v != null ? "±" + v : "—"],
+    ["scout_risk_mult", "試探單風險倍率", v => v != null ? "×" + v + "（半倉）" : "—"],
     ["confidence_floor", "把握度門檻", v => v],
     ["entry_validity_hours", "掛單有效期", v => v + " 小時"],
     ["max_hold_days", "最長持倉", v => v + " 天"],

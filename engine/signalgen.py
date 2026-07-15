@@ -31,14 +31,21 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
             h4 = None
     sig = F.compute_signal(D, t, state["weights"], h4=h4)
     macro = macro_gate(ts_signal)
-    gates, direction = [], "FLAT"
+    gates, direction, tier = [], "FLAT", None
 
-    if sig["score"] >= p["score_threshold"]:
-        direction = "LONG"
-    elif sig["score"] <= -p["score_threshold"]:
-        direction = "SHORT"
+    # 二級訊號：標準單（全額風險）／試探單（半額風險，低成本試錯）
+    sc = sig["score"]
+    scout_th = p.get("scout_threshold", 13)
+    if abs(sc) >= p["score_threshold"]:
+        tier = "standard"
+    elif p.get("scout_enabled", True) and abs(sc) >= scout_th:
+        tier = "scout"
+        gates.append(f"分數 {sc:+.0f} 達試探門檻 ±{scout_th}（未達標準 ±{p['score_threshold']:.0f}）"
+                     f"→ 以試探單出手，風險減半")
+    if tier:
+        direction = "LONG" if sc > 0 else "SHORT"
     else:
-        gates.append(f"綜合分數 {sig['score']:+.0f} 未達門檻 ±{p['score_threshold']:.0f} → 觀望")
+        gates.append(f"綜合分數 {sc:+.0f} 未達試探門檻 ±{scout_th}（標準 ±{p['score_threshold']:.0f}）→ 觀望")
 
     # 逆勢保護：強勢單邊行情中不逆勢接刀（除非軋空/殺多醞釀分數夠強）
     if direction != "FLAT":
@@ -69,23 +76,28 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
     plan = None
     if direction != "FLAT":
         conf = sig["confidence"]
-        risk = p["risk_pct_base"]
-        if conf >= 75:
-            risk = min(p["risk_pct_base"] * 1.3, 2.0)
-        elif conf < 62:
-            risk = p["risk_pct_base"] * 0.7
+        if tier == "scout":
+            risk = p["risk_pct_base"] * p.get("scout_risk_mult", 0.5)
+        else:
+            risk = p["risk_pct_base"]
+            if conf >= 75:
+                risk = min(p["risk_pct_base"] * 1.3, 2.0)
+            elif conf < 62:
+                risk = p["risk_pct_base"] * 0.7
         gov = drawdown_governor(trades)
         if gov < 1.0:
             gates.append(f"回撤保護：近 10 筆累計虧損超過 3R → 風險降至 {gov:.0%}（恢復前縮小部位）")
         risk = round(risk * risk_mult * gov, 2)
         plan = P.build_plan(direction, D, t, sig, state, touch, risk)
+        plan["tier"] = tier
         if plan["rr_to_res"] is not None and plan["rr_to_res"] < 1.6:
             sig["confidence"] = max(30, sig["confidence"] - 12)
-        if sig["confidence"] < p["confidence_floor"]:
-            gates.append(f"信心 {sig['confidence']:.0f} 低於門檻 {p['confidence_floor']} → 觀望"
+        floor = p.get("scout_conf_floor", 48) if tier == "scout" else p["confidence_floor"]
+        if sig["confidence"] < floor:
+            gates.append(f"信心 {sig['confidence']:.0f} 低於{'試探' if tier == 'scout' else ''}門檻 {floor} → 觀望"
                          + ("（近壓力空間不足）" if plan["warnings"] else ""))
-            direction, plan = "FLAT", None
+            direction, plan, tier = "FLAT", None, None
 
     watch = P.watch_conditions(sig) if direction == "FLAT" else []
-    return {"sig": sig, "direction": direction, "plan": plan,
+    return {"sig": sig, "direction": direction, "plan": plan, "tier": tier,
             "gates": gates, "macro": macro, "watch": watch, "signal_ts": ts_signal}

@@ -33,6 +33,10 @@ DEFAULT_STATE = {
         "risk_pct_base": 1.0,
         "score_threshold": 20,
         "confidence_floor": 55,
+        "scout_enabled": True,      # 試探單：分數達次級門檻即以「半風險」出手（低成本試錯）
+        "scout_threshold": 13,      # 試探單分數門檻（優化器依試探單期望值自動調整 11~19）
+        "scout_conf_floor": 48,     # 試探單信心門檻
+        "scout_risk_mult": 0.5,     # 試探單風險 = 基準風險 × 此倍率
         "entry_validity_hours": 48,
         "max_hold_days": 7,
         "max_leverage": 5,
@@ -179,6 +183,23 @@ def maybe_tune(state: dict, trades: list[dict], factor_history: list[dict], D,
             th_new = int(np.clip(th_old - 1, 18, 32))
             log_change("分數門檻", th_old, th_new, f"勝率 {wr:.0%} 良好 → 略放寬出手頻率")
             state["params"]["score_threshold"] = th_new
+
+    # 5) 試探單治理：期望值持續為負 → 提高試探門檻（收緊）；表現好 → 略放寬
+    scouts = [t for t in closed if t.get("tier") == "scout"
+              and t["status"] == "closed" and t["r"] is not None][-25:]
+    if state["params"].get("scout_enabled") and len(scouts) >= 12:
+        exp_s = float(np.mean([t["r"] for t in scouts]))
+        th_old = state["params"]["scout_threshold"]
+        if exp_s < -0.06:
+            th_new = int(np.clip(th_old + 2, 11, 19))
+            log_change("試探單門檻", th_old, th_new,
+                       f"近 {len(scouts)} 筆試探單期望值 {exp_s:.2f}R 為負 → 收緊試探出手")
+            state["params"]["scout_threshold"] = th_new
+        elif exp_s > 0.10 and th_old > 11:
+            th_new = th_old - 1
+            log_change("試探單門檻", th_old, th_new,
+                       f"近 {len(scouts)} 筆試探單期望值 {exp_s:+.2f}R 良好 → 略放寬")
+            state["params"]["scout_threshold"] = th_new
 
     state["tuned_at"] = today
     state["closed_at_last_tune"] = len(closed)

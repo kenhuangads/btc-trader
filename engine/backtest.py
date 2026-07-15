@@ -31,12 +31,14 @@ def run_backtest(D, state: dict, touch: dict, h4=None,
         res = SG.decide(D, t, state, trades, touch, h4=h4)
         factor_history.append({"date": ts_to_date(res["signal_ts"]), "ts": int(D["ts"].iloc[t]),
                                "scores": {f["name"]: f["score"] for f in res["sig"]["factors"] if f["ok"]}})
-        has_active = any(tr["status"] in ("pending", "open") for tr in trades)
-        if res["direction"] != "FLAT" and not has_active:
-            trades.append(R.new_trade(res["plan"], res["sig"], "backtest"))
-        elif res["direction"] != "FLAT" and has_active:
-            # 反向強訊號 → 標記在倉單提前離場（下一根開盤）
-            for tr in trades:
+        if res["direction"] != "FLAT":
+            active = [tr for tr in trades if tr["status"] in ("pending", "open")]
+            # 雙軌倉位：標準單與試探單各佔一個獨立倉位（總風險上限 = 兩者風險之和）
+            slot_free = not any(tr.get("tier", "standard") == res["tier"] for tr in active)
+            if slot_free:
+                trades.append(R.new_trade(res["plan"], res["sig"], "backtest"))
+            # 反向強訊號 → 所有反向在倉單提前離場（下一根開盤）
+            for tr in active:
                 if tr["status"] == "open" and tr["direction"] != res["direction"] \
                         and res["sig"]["confidence"] >= 70:
                     tr["force_exit"] = True
