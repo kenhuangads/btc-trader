@@ -28,7 +28,10 @@ input{font:inherit}
 #hdr{
   position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--bg) 88%,transparent);
   backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
-  border-bottom:1px solid var(--border);padding:10px 16px 8px;
+  border-bottom:1px solid var(--border);
+  /* 避開瀏海／動態島／狀態列：上內距加上安全區高度 */
+  padding:calc(10px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right))
+          8px calc(16px + env(safe-area-inset-left));
 }
 .hdr-row{display:flex;justify-content:space-between;align-items:center;max-width:760px;margin:0 auto}
 .hdr-right{display:flex;align-items:center;gap:10px}
