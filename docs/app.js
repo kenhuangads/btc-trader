@@ -80,9 +80,16 @@ function updateFreshness() {
   const fresh = !LATEST.stale && age < 5 * 3600e3;
   const nr = nextRefreshTime();
   const nrTxt = nr ? nr.toLocaleTimeString("zh-TW", TW_HM) : "—";
-  $("#data-time").innerHTML =
-    `<span class="live-dot${fresh ? "" : " off"}"></span>`
-    + `<span>${agoTxt(age)}更新 · 每 4 小時自動刷新<span class="nx"> · 下次約 ${nrTxt}</span></span>`;
+  // 只建立一次穩定結構，之後僅更新文字——避免每秒重寫 innerHTML 害脈動點動畫重啟
+  const dt = $("#data-time");
+  let dot = dt.querySelector(".live-dot"), txt = dt.querySelector(".fresh-txt");
+  if (!dot || !txt) {
+    dt.innerHTML = `<span class="live-dot"></span><span class="fresh-txt"></span>`;
+    dot = dt.querySelector(".live-dot"); txt = dt.querySelector(".fresh-txt");
+  }
+  dot.classList.toggle("off", !fresh);
+  // 誠實區分：進出場「訊號」每日定調（盤中凍結），每 4h 只是刷新盤面/持倉「追蹤」
+  txt.innerHTML = `${agoTxt(age)}更新 · 訊號每日、盤中每 4h 追蹤<span class="nx"> · 下次追蹤約 ${nrTxt}</span>`;
   $("#stale-badge").hidden = !(LATEST.stale || age > 30 * 3600e3);
 }
 function openModal() { const m = $("#modal"); m.hidden = false; m.style.display = "flex"; document.body.style.overflow = "hidden"; }
@@ -247,7 +254,7 @@ function renderLadder() {
     plan.entries.forEach((e, i) => {
       rows.push({ p: e.price, col: accent, chip: `🟢 ${eWord}${i + 1}（${Math.round(e.w * 100)}%資金）`, sub: e.prob != null ? `歷史成交率 ${Math.round(e.prob * 100)}%` : "" });
     });
-    rows.push({ p: plan.stop, col: red, chip: "🛑 停損（最大虧損處）", sub: `-${plan.stop_pct}% · 碰到就全部出場` });
+    rows.push({ p: plan.stop, col: red, chip: "🛑 停損", sub: `-${plan.stop_pct}% · 碰到就全部出場` });
     const eLo = Math.min(...plan.entries.map(e => e.price)), eHi = Math.max(...plan.entries.map(e => e.price));
     const tpLo = Math.min(...plan.tps.map(t => t.price)), tpHi = Math.max(...plan.tps.map(t => t.price));
     zones = [
@@ -304,14 +311,20 @@ function renderLadder() {
     s += `<text x="${W - 8}" y="${y - 1}" font-size="13" font-weight="800" fill="${text}" text-anchor="end">${fmt(r.p)}</text>`;
     s += `<text x="${W - 8}" y="${y + 13}" font-size="10" fill="${muted}" text-anchor="end" class="lv-dist" data-p="${r.p}">${distTxt(r.p, close)}</text>`;
   });
-  // 現價：左右兩顆實心膠囊（畫在最上層，遇到相近價位也讀得清楚）
+  // 現價：中央帶「單一膠囊」——落在左 chip 欄與右價格欄之間永遠空著的空白帶，
+  // 因此無論現價即時平移到哪個高度，都不會蓋住任何買點/目標/停損的價格（解掉「買點1看不清」）。
   const cy2 = Y(close);
+  // 中央帶＝左 chip 欄右緣(chipSafeR)與右價格欄左緣(priceSafeL)之間的空白；膠囊寬度隨帶寬縮放、
+  // 置中於帶內，永不侵入任一欄（窄機如 320px 也不再蓋住買點 chip）。過窄時退成純數字。
+  const chipSafeR = 142, priceSafeL = W - 60;
+  const gap = priceSafeL - chipSafeR;
+  const pillW = Math.max(64, Math.min(124, gap - 4));
+  const pcx = Math.round(chipSafeR + gap / 2);
+  const nowTxt = (pillW >= 84 ? "現價 " : "") + fmt(close);
   s += `<g id="ladder-now">
-    <line x1="4" x2="${W - 4}" y1="${cy2}" y2="${cy2}" stroke="${text}" stroke-width="1.6"/>
-    <rect x="4" y="${cy2 - 10}" rx="6" width="74" height="20" fill="${text}"/>
-    <text x="41" y="${cy2 + 4}" font-size="11" font-weight="800" fill="${card}" text-anchor="middle">▶ 現價</text>
-    <rect x="${W - GUT + 4}" y="${cy2 - 10}" rx="6" width="${GUT - 8}" height="20" fill="${text}"/>
-    <text x="${W - GUT / 2}" y="${cy2 + 4}" font-size="11.5" font-weight="800" fill="${card}" text-anchor="middle" id="ladder-now-p">${fmt(close)}</text>
+    <line class="now-line" x1="4" x2="${W - 4}" y1="${cy2}" y2="${cy2}" stroke="${text}" stroke-width="1.4" opacity=".85"/>
+    <rect class="now-pill" x="${pcx - pillW / 2}" y="${cy2 - 11}" rx="7" width="${pillW}" height="22" fill="${text}"/>
+    <text id="ladder-now-p" x="${pcx}" y="${cy2 + 4}" font-size="11.5" font-weight="800" fill="${card}" text-anchor="middle">${nowTxt}</text>
   </g>`;
   box.innerHTML = s + "</svg>";
 }
@@ -325,11 +338,11 @@ function updateLadderLive(p) {
   const { lo, hi, Y } = LADDER;
   if (p < lo || p > hi) { renderLadder(); return; }
   const y = Y(p);
-  const [line, lrect, ltxt, rrect] = [g.children[0], g.children[1], g.children[2], g.children[3]];
-  line.setAttribute("y1", y); line.setAttribute("y2", y);
-  lrect.setAttribute("y", y - 10); ltxt.setAttribute("y", y + 4);
-  if (rrect) rrect.setAttribute("y", y - 10);
-  const pl = $("#ladder-now-p"); if (pl) { pl.setAttribute("y", y + 4); pl.textContent = fmt(p); }
+  // 用 class/id 選取，不靠 children 索引——之後在 #ladder-now 內加元素也不會打壞便宜更新
+  const line = g.querySelector(".now-line"), pill = g.querySelector(".now-pill"), pl = $("#ladder-now-p");
+  if (line) { line.setAttribute("y1", y); line.setAttribute("y2", y); }
+  if (pill) pill.setAttribute("y", y - 11);
+  if (pl) { pl.setAttribute("y", y + 4); pl.textContent = (pill && +pill.getAttribute("width") >= 84 ? "現價 " : "") + fmt(p); }
   document.querySelectorAll(".lv-dist").forEach(el => { el.textContent = distTxt(+el.dataset.p, p); });
 }
 
@@ -348,7 +361,7 @@ function renderCalcMaybe() {
     </div>
     <div class="calc-out" id="calc-out"></div>
     <div id="calc-liq-warn" class="hint-block"></div>
-    <div class="countdown" id="calc-note"></div>
+    <div id="calc-order"></div>
     <div class="card-title" style="margin:14px 0 6px">這筆的可能結局 <span class="hint">照計畫執行時，各種劇本大約賺賠多少</span></div>
     <div id="calc-payoff"></div>
     <div id="calc-funding" class="hint-block"></div>
@@ -383,8 +396,45 @@ function renderCalcMaybe() {
       <div class="cell"><b class="${liqCls}">${fmt(liq)}</b><span>估計強平價<br>(${liqTxt})</span></div>`;
     $("#calc-liq-warn").textContent = warn +
       "（提醒：改槓桿不會改變倉位大小與賺賠，只改變鎖住的保證金和強平價）";
-    $("#calc-note").textContent =
-      `逐檔下單量：${plan.entries.map((e, i) => `第${i + 1}檔 ${(qty * e.w).toFixed(4)} BTC`).join("、")}（逐倉模式估算）`;
+    // 「照這個下單 · 三步驟」：把數字翻成交易所照抄的操作（隨本金/敢虧% 即時重算）
+    const dirLong = plan.direction === "LONG";
+    const openSide = dirLong ? "買進開多 Long" : "賣出開空 Short";
+    const closeSide = dirLong ? "賣出平多" : "買進平空";
+    const limitWord = dirLong ? "限價買單" : "限價賣單";
+    const nR = plan.entries.length;
+    const tp0 = plan.tps[0], tp1 = plan.tps[1];
+    // 各檔數量先各自四捨五入，合計＝這三個顯示值相加（照抄時三張加起來就等於合計）
+    const rowQ = plan.entries.map(e => +(qty * e.w).toFixed(4));
+    const sumQ = rowQ.reduce((a, b) => a + b, 0);
+    const orows = plan.entries.map((e, i) =>
+      `<tr><td>第${i + 1}張</td><td class="num">${fmt(e.price)}</td><td class="num">${rowQ[i].toFixed(4)}</td><td class="num">${e.prob != null ? Math.round(e.prob * 100) + "%" : "—"}</td></tr>`).join("");
+    const tpQ = (qty * 0.3).toFixed(4), runQ = (qty * 0.4).toFixed(4);
+    let step3 = "";
+    if (tp0) {
+      step3 = `<div class="kv"><span>止盈1　${fmt(tp0.price)}（+${tp0.r}R）</span><b>${closeSide} ${tpQ} BTC</b></div>
+        <div class="hint" style="margin:-2px 0 6px">成交後把停損移到均價 ${fmt(plan.avg_entry)}（之後這筆不再虧）。</div>`;
+      if (tp1) step3 += `<div class="kv"><span>止盈2　${fmt(tp1.price)}（+${tp1.r}R）</span><b>${closeSide} ${tpQ} BTC</b></div>
+        <div class="hint" style="margin:-2px 0 6px">再平一批，剩餘約 ${runQ} BTC 用移動停損跟著跑。兩張都選「止盈 Take-Profit／條件單」並勾 Reduce-Only。</div>`;
+    }
+    $("#calc-order").innerHTML = `
+      <div class="card-title" style="margin:14px 0 6px">照這個下單 · ${tp0 ? 3 : 2} 步驟 <span class="hint">到交易所把數字照抄；模擬建議，不會自動幫你下單</span></div>
+      <div class="order-step">
+        <span class="badge badge-green">① 掛 ${nR} 張${limitWord}</span>
+        <div class="hint" style="margin:6px 0">訂單類型＝限價單 Limit　·　方向＝${openSide}</div>
+        <table><thead><tr><th>第幾張</th><th class="num">委託價(限價)</th><th class="num">數量 BTC</th><th class="num">歷史成交率</th></tr></thead>
+        <tbody>${orows}<tr><td><b>合計</b></td><td class="num">—</td><td class="num"><b>${sumQ.toFixed(4)}</b></td><td class="num">—</td></tr></tbody></table>
+        <div class="hint">價格填委託價就好，沒到不會成交、也別追高；分張是為了分批進場。</div>
+      </div>
+      <div class="order-step">
+        <span class="badge badge-red">② 設 1 個停損（觸發後自動平倉）</span>
+        <div class="kv"><span>觸發價 ${fmt(plan.stop)}（−${plan.stop_pct}%）</span><b>${closeSide} ${qty.toFixed(4)} BTC</b></div>
+        <div class="hint">類型選「止損市價 Stop-Market／條件單」並勾「只減倉 Reduce-Only」。停損是碰到就幫你出場，不是再掛一張買賣單。</div>
+      </div>
+      ${step3 ? `<div class="order-step">
+        <span class="badge badge-amber">③ 設 ${tp1 ? 2 : 1} 個到價止盈（分批出場）</span>
+        ${step3}
+      </div>` : ""}
+      <div class="hint-block">新手最常錯的三件事：① 限價不追價，沒成交就等。② 停損＝觸發平倉，用條件單且要 Reduce-Only，別當成一般買賣單。③ 數量單位填 BTC，不是 USDT。<br>（若只成交部分買單，止盈／停損數量請按已成交部位等比縮小；各交易所命名可能不同：Stop-Market／條件單／Reduce-Only。模擬建議，不會自動幫你下單。）</div>`;
 
     // 可能結局試算（以全數成交計；部分成交時金額等比縮小，結構不變）
     const r1 = plan.tps[0]?.r ?? 0.7, r2 = plan.tps[1]?.r ?? (r1 + 1);
