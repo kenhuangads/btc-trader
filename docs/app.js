@@ -53,10 +53,37 @@ function debounce(fn, ms) { let t; return () => { clearTimeout(t); t = setTimeou
 
 /* ---------------- Header / Modal ---------------- */
 function renderHeader() {
-  const age = Date.now() - LATEST.generated_at;
-  $("#data-time").textContent = `更新：${LATEST.generated_taipei}（訊號每日 08:07 · 持倉追蹤每 4 小時）`;
-  if (LATEST.stale || age > 30 * 3600e3) $("#stale-badge").hidden = false;
+  updateFreshness();
   $("#live-price").textContent = fmt(LATEST.price.close);
+}
+const TW_HM = { timeZone: "Asia/Taipei", hour: "2-digit", minute: "2-digit", hour12: false };
+function agoTxt(ms) {
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return "剛剛";
+  if (m < 60) return `${m} 分鐘前`;
+  const h = Math.floor(m / 60);
+  return `${h} 小時${m % 60 ? " " + (m % 60) + " 分" : ""}前`;
+}
+function nextRefreshTime() {
+  // 引擎 cron 每 4h（UTC 00/04/08/12/16/20）＋建置推送約 10 分鐘落地
+  const now = Date.now();
+  for (let day = 0; day < 2; day++)
+    for (const s of [0, 4, 8, 12, 16, 20]) {
+      const d = new Date(); d.setUTCHours(s, 10, 0, 0); d.setUTCDate(d.getUTCDate() + day);
+      if (d.getTime() > now) return d;
+    }
+  return null;
+}
+function updateFreshness() {
+  if (!LATEST) return;
+  const age = Date.now() - LATEST.generated_at;
+  const fresh = !LATEST.stale && age < 5 * 3600e3;
+  const nr = nextRefreshTime();
+  const nrTxt = nr ? nr.toLocaleTimeString("zh-TW", TW_HM) : "—";
+  $("#data-time").innerHTML =
+    `<span class="live-dot${fresh ? "" : " off"}"></span>`
+    + `<span>${agoTxt(age)}更新 · 每 4 小時自動刷新<span class="nx"> · 下次約 ${nrTxt}</span></span>`;
+  $("#stale-badge").hidden = !(LATEST.stale || age > 30 * 3600e3);
 }
 function openModal() { const m = $("#modal"); m.hidden = false; m.style.display = "flex"; document.body.style.overflow = "hidden"; }
 function closeModal() { const m = $("#modal"); m.hidden = true; m.style.display = "none"; document.body.style.overflow = ""; try { localStorage.setItem("onboarded", "1"); } catch (e) { } }
@@ -73,7 +100,28 @@ function renderToday() {
     ? `<div class="card" style="padding:10px 14px"><span class="badge badge-amber">⚠ 大事件</span>
        <span style="font-size:13px;margin-left:6px">${evs.map(e => `${esc(e.name)} ${e.date}（${Math.round(e.hours_until)}h 後）`).join("、")}
        <span class="hint">公布前後波動大，系統自動降風險</span></span></div>` : "";
+  renderAlerts();
   renderHero(); renderTug(); renderLadder(); renderCalcMaybe(); renderChart(); renderFactors(); renderDiscipline();
+}
+
+function renderAlerts() {
+  const box = $("#alerts"); if (!box) return;
+  const A = LATEST.alerts || [];
+  if (!A.length) {
+    box.innerHTML = `<div class="alert-empty">🔕 目前無盤中提醒 · 系統每 4 小時掃描一次（依早上的訊號與掛單計畫執行即可）</div>`;
+    return;
+  }
+  const now = Date.now();
+  const hasOpp = A.some(a => a.level === "opp");
+  box.innerHTML = `<div class="card alert-card${hasOpp ? " has-opp" : ""}">
+    <div class="card-title">🔔 盤中機會提醒 <span class="hint">兩次日訊號之間、值得你現在看一眼的事</span></div>
+    ${A.map(a => `<div class="alert-row lv-${esc(a.level)}">
+      <span class="alert-ico">${a.icon || "•"}</span>
+      <div class="alert-main"><div class="alert-t">${esc(a.title)}</div>
+        <div class="alert-d">${esc(a.detail || "")}</div></div>
+      <span class="alert-ago">${a.ongoing ? "進行中" : esc(agoTxt(now - (a.ts || now)))}</span>
+    </div>`).join("")}
+  </div>`;
 }
 
 function renderHero() {
@@ -817,6 +865,7 @@ async function livePriceLoop() {
 }
 
 function tickCountdown() {
+  updateFreshness();
   const plan = LATEST?.signal?.plan; if (!plan) return;
   const v = plan.validity_ms - Date.now(), d = plan.deadline_ms - Date.now();
   const fmtDur = ms => { const h = Math.floor(ms / 3600e3), m = Math.floor(ms % 3600e3 / 60e3); return `${h} 小時 ${m} 分`; };

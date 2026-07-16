@@ -10,6 +10,7 @@ import datetime as dt
 
 import numpy as np
 
+from . import alerts as AL
 from . import backtest as BT
 from . import factors as F
 from . import fetchers as FE
@@ -158,9 +159,10 @@ def main() -> int:
     edges = OPT.factor_edges(factor_history, D)
 
     closes = D["close"]
+    alerts = AL.build_alerts(D, t, sig, trades, m, now_ms())
     latest = {
         "generated_at": now_ms(), "generated_taipei": taipei_str(now_ms()),
-        "signal_date": signal_date, "stale": False,
+        "signal_date": signal_date, "stale": False, "alerts": alerts,
         "src": {"klines": m["src_klines"], "deriv": m["src_deriv"]},
         "price": {"close": float(closes.iloc[t]), "atr": float(D["atr"].iloc[t]),
                   "chg_1d": round(float(closes.iloc[t] / closes.iloc[t - 1] - 1) * 100, 2),
