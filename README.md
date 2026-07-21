@@ -59,6 +59,8 @@ GitHub Actions（每日 00:07 UTC）
       ├─ planner.py      掛單梯、停損停利、槓桿倉位、觸價機率
       ├─ review.py       1h K 精確重播在途單、統計、自動復盤筆記
       ├─ optimizer.py    調參 + 觸價機率曲線重估
+      ├─ notify.py       手機推播（ntfy／Telegram，secrets 未設定即停用）
+      ├─ alerts.py       盤中機會提醒（持倉事件／插針測試關鍵價／費率極端）
       └─ backtest.py     首次部署 walk-forward 回測建立基準（零未來資訊）
   → 產出 docs/data/*.json 並 commit → GitHub Pages 靜態儀表板（PWA）
 ```
@@ -74,6 +76,19 @@ python -m engine.run_daily              # 每日更新
 python -m engine.run_daily --bootstrap  # 重建回測基準
 python -m http.server 8123 -d docs     # http://localhost:8123 預覽
 ```
+
+## 手機推播通知
+
+引擎每 4 小時執行時，遇到「值得馬上看」的事件會推播到手機（同一事件 21 天內不重覆；secrets 未設定則自動停用）：
+
+- 🟢 **新訊號**（含掛單價區間／停損／TP1／信心）、**掛單成交**、**結案結果**、**掛單過期取消**
+- 🔔 **盤中機會提醒**（掛單區被觸及、插針測試關鍵價位、資金費率極端）
+
+**設定方式（ntfy，免註冊）**：手機安裝 [ntfy](https://ntfy.sh) App → 訂閱主題（主題名存於本 repo 的
+Actions secret `NTFY_TOPIC`，屬私密資訊勿外流——知道主題名就能收到訊號）→ 完成。
+
+**替代方案（Telegram）**：建立 Bot 取得 token 與你的 chat_id，設為 repo secrets
+`TELEGRAM_BOT_TOKEN` 與 `TELEGRAM_CHAT_ID`，下一輪起生效（兩通道可並用）。
 
 ## 常見操作
 

@@ -13,6 +13,7 @@ import numpy as np
 from . import alerts as AL
 from . import backtest as BT
 from . import factors as F
+from . import notify as NT
 from . import fetchers as FE
 from . import optimizer as OPT
 from . import review as R
@@ -105,6 +106,7 @@ def main() -> int:
         OPT.maybe_tune(state, trades, factor_history, D, now_ms(), force=True)
 
     # ---------------- 實盤在途單：以 1h K 精確重播 ----------------
+    pre_status = {tr["id"]: tr["status"] for tr in trades}  # 供推播偵測本輪狀態變化
     atr_by_day = {int(ts): float(a) for ts, a in zip(D["ts"], D["atr"]) if not np.isnan(a)}
     h1 = m["h1"][["ts", "open", "high", "low", "close"]]
     for tr in trades:
@@ -125,11 +127,13 @@ def main() -> int:
     active = [tr for tr in trades if tr["status"] in ("pending", "open")]
     already_today = any(tr["date"] == signal_date for tr in trades)
     position_note = None
+    new_live_trade = None
     if res["direction"] != "FLAT":
         tier_label = "試探" if res["tier"] == "scout" else "標準"
         slot_taken = any(tr.get("tier", "standard") == res["tier"] for tr in active)
         if not slot_taken and not already_today:
-            trades.append(R.new_trade(plan, sig, "live"))
+            new_live_trade = R.new_trade(plan, sig, "live")
+            trades.append(new_live_trade)
             log(f"新增推薦單：{res['direction']}（{tier_label}單）信心 {sig['confidence']:.0f}")
         elif slot_taken:
             same = next(tr for tr in active if tr.get("tier", "standard") == res["tier"])
@@ -160,6 +164,58 @@ def main() -> int:
 
     closes = D["close"]
     alerts = AL.build_alerts(D, t, sig, trades, m, now_ms())
+
+    # ---------------- 手機推播（ntfy／Telegram；未設定即停用，失敗不影響流程） ----------------
+    if not need_bootstrap:
+        try:
+            events = []
+            if new_live_trade is not None:
+                p2 = new_live_trade["plan"]
+                lo2 = min(e["price"] for e in p2["entries"])
+                hi2 = max(e["price"] for e in p2["entries"])
+                dw = "做多" if res["direction"] == "LONG" else "做空"
+                tier_w = "試探單·半倉" if res["tier"] == "scout" else "標準單"
+                events.append({"key": f"signal:{signal_date}", "priority": "high",
+                               "title": f"{'🟢' if res['direction'] == 'LONG' else '🔴'} 新訊號：{dw}（{tier_w}）",
+                               "body": f"掛單 {lo2:,.0f}–{hi2:,.0f}｜停損 {p2['stop']:,.0f}｜TP1 "
+                                       f"{p2['tps'][0]['price']:,.0f}｜信心 {sig['confidence']:.0f}。"
+                                       f"開儀表板照「幣安版三步驟」掛單。"})
+            reason_zh = {"tp1": "止盈1", "tp2": "止盈2", "stop": "停損", "be_stop": "保本出場",
+                         "trail_stop": "移動停損", "time": "到期平倉", "reverse_signal": "反向訊號離場",
+                         "stagnation": "停滯出場", "protect_stop": "鎖利停損"}
+            for tr in trades:
+                if tr["mode"] != "live" or tr["id"] not in pre_status:
+                    continue
+                old, new = pre_status[tr["id"]], tr["status"]
+                dw = "做多" if tr["direction"] == "LONG" else "做空"
+                if old == "pending" and new == "open":
+                    avg2, fw2 = R._avg_fill(tr)
+                    events.append({"key": f"fill:{tr['id']}", "priority": "high",
+                                   "title": "🟢 掛單成交，倉位已開",
+                                   "body": f"{dw}單成交均價約 {avg2:,.0f}（{fw2:.0%} 部位）。"
+                                           f"記得掛止盈，並確認停損 {tr['stop_now']:,.0f}。"})
+                elif old in ("pending", "open") and new == "closed":
+                    r2 = tr["r"] or 0.0
+                    lab = reason_zh.get(tr["exits"][-1]["reason"], "出場") if tr["exits"] else "出場"
+                    emo = "✅" if r2 > 0.1 else ("🔴" if r2 < -0.1 else "🟡")
+                    events.append({"key": f"closed:{tr['id']}", "priority": "default",
+                                   "title": f"{emo} 結案 {r2:+.2f}R（{lab}）",
+                                   "body": f"{tr['date']} 的{dw}單已全部出場，細節見復盤頁。"})
+                elif old == "pending" and new == "cancelled":
+                    events.append({"key": f"cxl:{tr['id']}", "priority": "default",
+                                   "title": "⌛ 掛單 48 小時未成交，已取消",
+                                   "body": "沒等到回檔價位，資金不佔用；等下一個訊號。"})
+            for a in alerts:
+                events.append({"key": f"alert:{a['kind']}:{a['title']}",
+                               "priority": "high" if a["level"] == "opp" else "default",
+                               "title": f"{a.get('icon', '🔔')} {a['title']}",
+                               "body": a.get("detail", "")})
+            n_sent = NT.notify_events(events, STATE / "notify_log.json")
+            if n_sent:
+                log(f"手機推播 {n_sent} 則")
+        except Exception as e:  # noqa: BLE001
+            log(f"推播失敗（不影響流程）：{e}")
+
     latest = {
         "generated_at": now_ms(), "generated_taipei": taipei_str(now_ms()),
         "signal_date": signal_date, "stale": False, "alerts": alerts,

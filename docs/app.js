@@ -396,45 +396,66 @@ function renderCalcMaybe() {
       <div class="cell"><b class="${liqCls}">${fmt(liq)}</b><span>估計強平價<br>(${liqTxt})</span></div>`;
     $("#calc-liq-warn").textContent = warn +
       "（提醒：改槓桿不會改變倉位大小與賺賠，只改變鎖住的保證金和強平價）";
-    // 「照這個下單 · 三步驟」：把數字翻成交易所照抄的操作（隨本金/敢虧% 即時重算）
+    // 「照這個下單（幣安版）」：用幣安 App 合約下單面板的實際欄位與流程產生照抄步驟；
+    // 數量按幣安 BTCUSDT 永續最小跳動 0.001 BTC 取整（末張吸收差額，合計吻合可對帳）
     const dirLong = plan.direction === "LONG";
-    const openSide = dirLong ? "買進開多 Long" : "賣出開空 Short";
-    const closeSide = dirLong ? "賣出平多" : "買進平空";
+    const openBtn = dirLong ? "買入/做多" : "賣出/做空";
+    const closeBtn = dirLong ? "賣出/做空" : "買入/做多";   // 平倉按鈕（配合「只減倉」不會反向開新倉）
     const limitWord = dirLong ? "限價買單" : "限價賣單";
     const nR = plan.entries.length;
     const tp0 = plan.tps[0], tp1 = plan.tps[1];
-    // 各檔數量先各自四捨五入，合計＝這三個顯示值相加（照抄時三張加起來就等於合計）
-    const rowQ = plan.entries.map(e => +(qty * e.w).toFixed(4));
-    const sumQ = rowQ.reduce((a, b) => a + b, 0);
-    const orows = plan.entries.map((e, i) =>
-      `<tr><td>第${i + 1}張</td><td class="num">${fmt(e.price)}</td><td class="num">${rowQ[i].toFixed(4)}</td><td class="num">${e.prob != null ? Math.round(e.prob * 100) + "%" : "—"}</td></tr>`).join("");
-    const tpQ = (qty * 0.3).toFixed(4), runQ = (qty * 0.4).toFixed(4);
-    let step3 = "";
+    const STEP = 0.001, f3 = v => v.toFixed(3);
+    const totalQ = Math.round(qty / STEP) * STEP;
+    const rowQ = plan.entries.map(e => Math.round(qty * e.w / STEP) * STEP);
+    rowQ[nR - 1] = Math.max(0, +(totalQ - rowQ.slice(0, -1).reduce((a, b) => a + b, 0)).toFixed(3));
+    const tooSmall = totalQ < STEP * nR || rowQ.some(v => v < STEP - 1e-9);
+    const minW = Math.min(...plan.entries.map(e => e.w));
+    const minEq = STEP * plan.avg_entry * plan.stop_pct / (Math.max(risk, 0.01) * minW);
+    let tq1 = 0, tq2 = 0, runnerQ = 0;
     if (tp0) {
-      step3 = `<div class="kv"><span>止盈1　${fmt(tp0.price)}（+${tp0.r}R）</span><b>${closeSide} ${tpQ} BTC</b></div>
-        <div class="hint" style="margin:-2px 0 6px">成交後把停損移到均價 ${fmt(plan.avg_entry)}（之後這筆不再虧）。</div>`;
-      if (tp1) step3 += `<div class="kv"><span>止盈2　${fmt(tp1.price)}（+${tp1.r}R）</span><b>${closeSide} ${tpQ} BTC</b></div>
-        <div class="hint" style="margin:-2px 0 6px">再平一批，剩餘約 ${runQ} BTC 用移動停損跟著跑。兩張都選「止盈 Take-Profit／條件單」並勾 Reduce-Only。</div>`;
+      tq1 = Math.max(STEP, Math.round(totalQ * 0.3 / STEP) * STEP);
+      tq2 = tp1 ? tq1 : 0;
+      runnerQ = Math.max(0, +(totalQ - tq1 - tq2).toFixed(3));
+    }
+    // 這個槓桿安全嗎？強平距離需 ≥ 1.3 倍停損距離 → 反推安全槓桿上限
+    const maxSafeLev = Math.max(1, Math.floor(1 / (1.3 * plan.stop_pct / 100 + 0.006)));
+    const levGate = ratio < 1.0
+      ? `<div class="hint-block" style="color:var(--red)">⛔ 目前 ${lev}x 的強平價比停損還近——先把上面「槓桿倍數」降到 <b>≤ ${maxSafeLev} 倍</b>（建議 ${plan.leverage} 倍）再照抄下單，否則計畫中的小虧會變成保證金歸零。</div>`
+      : ratio < 1.3
+        ? `<div class="hint-block" style="color:var(--amber)">⚠ ${lev}x 的強平價貼近停損，插針或滑價可能先掃到強平；穩一點請降到 ≤ ${maxSafeLev} 倍。</div>` : "";
+    const rungMargin = rowQ.map(v => fmt(v * plan.avg_entry / lev, 1)).join("、");
+    const orows = plan.entries.map((e, i) =>
+      `<tr><td>第${i + 1}張</td><td class="num">${fmt(e.price)}</td><td class="num">${f3(rowQ[i])}</td><td class="num">${e.prob != null ? Math.round(e.prob * 100) + "%" : "—"}</td></tr>`).join("");
+    let step2 = "";
+    if (tp0) {
+      step2 = `<div class="kv"><span>止盈1　${fmt(tp0.price)}（+${tp0.r}R）</span><b>${closeBtn} ${f3(tq1)} BTC</b></div>` +
+        (tp1 ? `<div class="kv"><span>止盈2　${fmt(tp1.price)}（+${tp1.r}R）</span><b>${closeBtn} ${f3(tq2)} BTC</b></div>` : "") +
+        `<div class="hint" style="margin:4px 0 0">一樣選「限價單」：價格填止盈價、數量照上，<b>勾「只減倉」</b>再按「${closeBtn}」——有勾只減倉就是平倉，不會反向開新倉。剩下約 ${f3(runnerQ)} BTC 先不掛，留給移動停損跟跑。</div>`;
     }
     $("#calc-order").innerHTML = `
-      <div class="card-title" style="margin:14px 0 6px">照這個下單 · ${tp0 ? 3 : 2} 步驟 <span class="hint">到交易所把數字照抄；模擬建議，不會自動幫你下單</span></div>
+      <div class="card-title" style="margin:14px 0 6px">照這個下單（幣安版）<span class="hint">照抄到幣安 App 合約；模擬建議，不會自動幫你下單</span></div>
+      <div class="hint" style="margin:0 0 2px">你的設定：本金 ${fmt(eq)} U · 敢虧 ${risk}%（≈${fmt(riskUsd, 0)} U）· 槓桿 ${lev}x → 全部成交約需保證金 ${fmt(margin, 0)} U（每張約 ${rungMargin} U）。<b>改槓桿只會變保證金與強平價——下面的價格與數量都不變</b>（倉位大小由「敢虧多少」決定，想改數量請調本金或敢虧%）。</div>
+      ${levGate}
+      ${tooSmall ? `<div class="hint-block" style="color:var(--amber)">⚠ 本金偏小：有掛單不足幣安最小 0.001 BTC——建議本金至少約 ${fmt(minEq, 0)} U，或把「這筆敢虧%」調高。</div>` : ""}
       <div class="order-step">
-        <span class="badge badge-green">① 掛 ${nR} 張${limitWord}</span>
-        <div class="hint" style="margin:6px 0">訂單類型＝限價單 Limit　·　方向＝${openSide}</div>
-        <table><thead><tr><th>第幾張</th><th class="num">委託價(限價)</th><th class="num">數量 BTC</th><th class="num">歷史成交率</th></tr></thead>
-        <tbody>${orows}<tr><td><b>合計</b></td><td class="num">—</td><td class="num"><b>${sumQ.toFixed(4)}</b></td><td class="num">—</td></tr></tbody></table>
-        <div class="hint">價格填委託價就好，沒到不會成交、也別追高；分張是為了分批進場。</div>
+        <span class="badge badge-green">① 掛 ${nR} 張${limitWord}（每張自帶停損）</span>
+        <div class="hint" style="margin:6px 0">幣安 App：合約 → BTCUSDT 永續 → 保證金模式點開改「<b>逐倉</b>」、槓桿 ≤ ${maxSafeLev} 倍 → 訂單類型選「<b>限價單</b>」。</div>
+        <table><thead><tr><th>第幾張</th><th class="num">價格(USDT)</th><th class="num">數量 BTC</th><th class="num">歷史成交率</th></tr></thead>
+        <tbody>${orows}<tr><td><b>合計</b></td><td class="num">—</td><td class="num"><b>${f3(totalQ)}</b></td><td class="num">—</td></tr></tbody></table>
+        <div class="hint">每一張都：填好價格與數量 → <b>勾「止盈/止損」，在【止損】欄填觸發價 ${fmt(plan.stop)}</b>（觸發類型用預設「最新」、執行市價；止盈先留空）→ 按「${openBtn}」。這樣任何一張成交的當下就自帶停損保護。掛了沒馬上成交是正常的——限價單就是在等回檔。</div>
       </div>
-      <div class="order-step">
-        <span class="badge badge-red">② 設 1 個停損（觸發後自動平倉）</span>
-        <div class="kv"><span>觸發價 ${fmt(plan.stop)}（−${plan.stop_pct}%）</span><b>${closeSide} ${qty.toFixed(4)} BTC</b></div>
-        <div class="hint">類型選「止損市價 Stop-Market／條件單」並勾「只減倉 Reduce-Only」。停損是碰到就幫你出場，不是再掛一張買賣單。</div>
-      </div>
-      ${step3 ? `<div class="order-step">
-        <span class="badge badge-amber">③ 設 ${tp1 ? 2 : 1} 個到價止盈（分批出場）</span>
-        ${step3}
+      ${tp0 ? `<div class="order-step">
+        <span class="badge badge-amber">② 有成交後 → 掛 ${tp1 ? 2 : 1} 張止盈（限價＋只減倉）</span>
+        ${step2}
       </div>` : ""}
-      <div class="hint-block">新手最常錯的三件事：① 限價不追價，沒成交就等。② 停損＝觸發平倉，用條件單且要 Reduce-Only，別當成一般買賣單。③ 數量單位填 BTC，不是 USDT。<br>（若只成交部分買單，止盈／停損數量請按已成交部位等比縮小；各交易所命名可能不同：Stop-Market／條件單／Reduce-Only。模擬建議，不會自動幫你下單。）</div>`;
+      <div class="order-step">
+        <span class="badge badge-slate">③ 之後的維護（不用盯盤，每天一次）</span>
+        ${tp0 ? `<div class="kv"><span>🎯 止盈1 成交後</span><b>把止損觸發價改到成本 ${fmt(plan.avg_entry)}</b></div>` : ""}
+        <div class="kv"><span>🔄 每天開復盤頁看「目前停損」</span><b>把幣安的止損改成一樣的數字</b></div>
+        <div class="kv"><span>⌛ 掛單 48 小時沒成交</span><b>全部撤單，等下一個訊號</b></div>
+        <div class="hint" style="margin:4px 0 0">系統會自動上移停損鎖利（保本 → 移動停損），你只要每天同步一次數字；持倉最多 7 天。</div>
+      </div>
+      <div class="hint-block">新手三大地雷：① 限價不追價，沒成交就等。② 停損是「觸發平倉」，記得勾只減倉。③ 數量單位是 BTC 不是 USDT。<br>（數量已按幣安 BTCUSDT 永續最小 0.001 BTC 取整${Math.abs(totalQ - qty) > 5e-5 ? `，理論總量 ${qty.toFixed(4)}` : ""}；只成交部分掛單時，止盈數量請按比例縮小；其他交易所用語與最小單位不同。模擬建議，不會自動幫你下單。）</div>`;
 
     // 可能結局試算（以全數成交計；部分成交時金額等比縮小，結構不變）
     const r1 = plan.tps[0]?.r ?? 0.7, r2 = plan.tps[1]?.r ?? (r1 + 1);
