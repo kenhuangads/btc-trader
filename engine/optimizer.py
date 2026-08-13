@@ -17,7 +17,9 @@ DEFAULT_STATE = {
     "tuned_at": None,
     "closed_at_last_tune": 0,
     "params": {
-        "entry_offsets_atr": [0.32, 0.70, 1.10],
+        "entry_offsets_atr": [0.32, 0.70, 1.10],   # 後備檔位（觸價機率表不可用時）
+        "entry_prob_targets": [0.60, 0.42, 0.25],  # 機率導向掛單：各檔目標 48h 觸價率，由近期觸價曲線反推 ATR 檔位
+        "touch_lookback": 180,                     # 觸價機率曲線回看天數（180 = 跟隨近期波動結構自動再校準）
         "entry_depth_mult": 1.0,
         "rung_weights": [0.40, 0.35, 0.25],
         "stop_buffer_atr": 0.6,
@@ -79,7 +81,35 @@ def touch_prob_table(D, horizon_days: int = 2, lookback: int = 700) -> dict:
             if w_hi >= c + o * a:
                 short_hit[o][0] += 1
     fmt = lambda d: {f"{o:.1f}": round(v[0] / v[1], 3) for o, v in d.items() if v[1] > 50}
-    return {"long": fmt(long_hit), "short": fmt(short_hit), "horizon_days": horizon_days}
+    return {"long": fmt(long_hit), "short": fmt(short_hit),
+            "horizon_days": horizon_days, "lookback": lookback}
+
+
+def invert_touch_targets(touch: dict, targets: list[float]) -> list[float] | None:
+    """機率導向掛單：把「目標觸價率」反推成 ATR 檔位（多空曲線平均、線性內插）。
+
+    波動結構改變時，觸價曲線隨之位移，檔位自動再校準——比固定 ATR 倍數
+    更貼近「每一檔都應該有明確的成交機率預算」的設計意圖。
+    """
+    tl, ts = touch.get("long") or {}, touch.get("short") or {}
+    xs = sorted(set(float(k) for k in tl) & set(float(k) for k in ts))
+    if len(xs) < 4:
+        return None
+    ps = [(tl[f"{x:.1f}"] + ts[f"{x:.1f}"]) / 2 for x in xs]
+    offs = []
+    for tg in targets:
+        off = xs[-1]
+        for (x1, p1), (x2, p2) in zip(zip(xs, ps), zip(xs[1:], ps[1:])):
+            if p2 <= tg <= p1:
+                off = x1 + (x2 - x1) * (p1 - tg) / (p1 - p2) if p1 != p2 else x1
+                break
+        else:
+            if tg >= ps[0]:
+                off = xs[0]
+        offs.append(float(np.clip(off, 0.15, 1.6)))
+    for i in range(1, len(offs)):  # 保證由淺到深且至少隔 0.12 ATR
+        offs[i] = max(offs[i], offs[i - 1] + 0.12)
+    return [round(o, 2) for o in offs]
 
 
 def factor_edges(factor_history: list[dict], D) -> dict:

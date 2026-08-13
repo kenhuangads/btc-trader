@@ -9,6 +9,7 @@
 """
 import numpy as np
 
+from .optimizer import invert_touch_targets
 from .util import DAY_MS, price_rnd
 
 
@@ -40,7 +41,13 @@ def build_plan(direction: str, D, t: int, sig: dict, state: dict,
     clusters = sig["clusters"]
 
     # --- 進場掛單梯（回檔限價），並吸附至鄰近價位群 ---
-    offsets = [o * p["entry_depth_mult"] for o in p["entry_offsets_atr"]]
+    # 機率導向：由近期觸價曲線反推「目標成交率」對應的 ATR 檔位（表不可用時退回固定檔位）
+    base_offs = None
+    if p.get("entry_prob_targets"):
+        base_offs = invert_touch_targets(touch_probs, p["entry_prob_targets"])
+    if not base_offs:
+        base_offs = list(p["entry_offsets_atr"])
+    offsets = [o * p["entry_depth_mult"] for o in base_offs]
     weights = p["rung_weights"]
     entries = []
     for off, w in zip(offsets, weights):

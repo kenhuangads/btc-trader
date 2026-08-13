@@ -99,8 +99,8 @@ def main() -> int:
     need_bootstrap = bootstrap_flag or (not trades and not factor_history)
     if need_bootstrap:
         log("啟動回測 bootstrap …")
-        touch = OPT.touch_prob_table(D)
         state = copy.deepcopy(OPT.DEFAULT_STATE)
+        touch = OPT.touch_prob_table(D, lookback=state["params"].get("touch_lookback", 700))
         trades, factor_history = BT.run_backtest(D, state, touch, h4=m["h4"],
                                                  funding_by_day=funding_by_day)
         OPT.maybe_tune(state, trades, factor_history, D, now_ms(), force=True)
@@ -116,6 +116,11 @@ def main() -> int:
                 R.add_lessons(tr, D)
 
     # ---------------- 今日訊號 ----------------
+    # 觸價機率曲線：每週日重算；lookback 參數變更（或表尚無標記）時立即重算，
+    # 讓機率導向掛單永遠對齊近期波動結構
+    lb = state["params"].get("touch_lookback", 700)
+    if touch.get("lookback") != lb or dt.datetime.now(dt.timezone.utc).weekday() == 6:
+        touch = OPT.touch_prob_table(D, lookback=lb)
     res = SG.decide(D, t, state, trades, touch, h4=m["h4"])
     sig, plan = res["sig"], res["plan"]
     signal_date = ts_to_date(res["signal_ts"])
@@ -151,9 +156,6 @@ def main() -> int:
 
     # ---------------- 迭代優化 ----------------
     tune_logs = OPT.maybe_tune(state, trades, factor_history, D, now_ms())
-    wd = dt.datetime.now(dt.timezone.utc).weekday()
-    if need_bootstrap or wd == 6:
-        touch = OPT.touch_prob_table(D)
 
     # ---------------- 統計與輸出 ----------------
     stats_all = R.compute_stats(trades)
