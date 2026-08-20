@@ -106,6 +106,24 @@ def build_plan(direction: str, D, t: int, sig: dict, state: dict,
         {"name": "TP2", "price": price_rnd(avg_entry + sgn * tp2_r * dist), "frac": 0.30, "r": tp2_r,
          "action": "再平 30%，餘倉讓利潤奔跑"},
     ]
+    # TP1 擋牆前緣：獲利路徑上有比 TP1 更近的強級別 → TP1 提前到級別前緣先行入袋
+    # （價格常在強級別前反轉；把第一筆止盈擋在牆前，而不是寄望穿牆）
+    if p.get("tp_wall"):
+        if direction == "LONG":
+            walls = [c["price"] for c in clusters if c["price"] > avg_entry * 1.002 and c["strength"] >= 2]
+            wall = min(walls) if walls else None
+        else:
+            walls = [c["price"] for c in clusters if c["price"] < avg_entry * 0.998 and c["strength"] >= 2]
+            wall = max(walls) if walls else None
+        if wall is not None:
+            px = wall - sgn * 0.06 * atr
+            r_new = sgn * (px - avg_entry) / dist
+            if p["tp_wall"] == "clamp":  # clamp 模式：牆再近也至少收在 +0.30R（吃反彈的一半）
+                r_new = max(r_new, 0.30)
+                px = avg_entry + sgn * r_new * dist
+            if 0.30 <= r_new < tp1_r:
+                tps[0].update({"price": price_rnd(px), "r": round(r_new, 2),
+                               "action": "平 30%（強級別前緣先行入袋），停損移保本＋啟動移動停損"})
     trail_txt = f"餘倉 40% 以 {p['trail_atr_mult']:.1f}×ATR 吊燈式移動停損讓利潤奔跑（TP1 後啟動）"
     targets = []
     if direction == "LONG":

@@ -127,7 +127,9 @@ def process_trade(tr: dict, bars, atr_by_day: dict, params: dict,
         eff = tr["stop_now"]
         stopped = l <= eff if sgn == 1 else h >= eff
         if stopped:
-            px = eff * (1 - sgn * SLIP)
+            # 跳空/瀑布穿越停損：市價停損不可能成交在比開盤更好的價（誠實模擬）
+            base = min(eff, o) if sgn == 1 else max(eff, o)
+            px = base * (1 - sgn * SLIP)
             _exit(tr, px, _remaining(tr), ts, _STOP_REASON.get(tr["stop_src"], "stop"))
             _close(tr, params)
             return
@@ -325,13 +327,20 @@ def equity_curve(trades: list[dict], start_eq: float = 10_000.0) -> list[dict]:
     return out
 
 
-def cooling_active(trades: list[dict], now_ms: int) -> bool:
-    """連續 2 筆實質停損（r < -0.5R）且最近一筆在 3 日內 → 冷卻（今日強制觀望）。
+def cooling_direction(trades: list[dict], now_ms: int) -> str | None:
+    """連續 2 筆實質停損（r < -0.5R）且最近一筆在 3 日內 → 回傳「該冷卻的方向」。
+    兩筆同向 → 回傳該方向（方向化冷卻只擋同向報復單；反向訊號＝市場已證明另一邊，可放行）；
+    兩筆異向 → 回傳 "ANY"（多空都看錯，全面冷卻）。無冷卻 → None。
     停滯/到期的 ±0 小額出場不觸發冷卻——那不是判斷錯誤，只是行情沒來。"""
     closed = sorted([t for t in trades if t["status"] == "closed" and t["r"] is not None],
                     key=lambda x: x.get("exit_ts", 0))
     if len(closed) < 2:
-        return False
+        return None
     a, b = closed[-2], closed[-1]
-    recent = now_ms - b.get("exit_ts", 0) <= 3 * DAY_MS
-    return a["r"] < -0.5 and b["r"] < -0.5 and recent
+    if not (a["r"] < -0.5 and b["r"] < -0.5 and now_ms - b.get("exit_ts", 0) <= 3 * DAY_MS):
+        return None
+    return a["direction"] if a["direction"] == b["direction"] else "ANY"
+
+
+def cooling_active(trades: list[dict], now_ms: int) -> bool:
+    return cooling_direction(trades, now_ms) is not None

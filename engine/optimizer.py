@@ -42,6 +42,10 @@ DEFAULT_STATE = {
         "entry_validity_hours": 48,
         "max_hold_days": 7,
         "max_leverage": 5,
+        "rr_floor": None,              # 獲利空間下限（R）：到最近強反向級別不足此值 → 不出手（None=停用）
+        "dup_stop_atr": None,          # 同結構重複風險：與在途同向單停損相距 < 此 ATR 倍數 → 不重複下注（None=停用）
+        "cooling_directional": False,  # 方向化冷卻：連續停損只擋同方向訊號，反向放行
+        "tp_wall": False,              # TP1 擋牆前緣：獲利路徑上有更近的強級別 → TP1 提前到級別前緣
     },
     "weights": {"trend_daily": 1.0, "trend_4h": 0.8, "momentum": 0.7, "funding": 0.9,
                 "oi_price": 0.9, "taker_flow": 0.6, "rvol": 0.5, "wick_magnet": 0.5,

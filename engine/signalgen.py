@@ -6,7 +6,7 @@ from .util import DAY_MS
 from . import factors as F
 from . import planner as P
 from .macro import macro_gate
-from .review import cooling_active
+from .review import cooling_direction
 
 H4_MS = DAY_MS // 6
 
@@ -58,10 +58,15 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
             direction = "FLAT"
             gates.append("日線強勢多頭中不逆勢做空（殺多條件未成形）")
 
-    # 冷卻紀律：連續 2 筆停損 → 強制觀望一日
-    if direction != "FLAT" and cooling_active(trades, ts_signal):
-        direction = "FLAT"
-        gates.append("紀律冷卻：連續 2 筆停損，今日強制觀望（防報復性交易）")
+    # 冷卻紀律：連續 2 筆停損 → 強制觀望（方向化冷卻開啟時，只擋與虧損同方向的報復單）
+    if direction != "FLAT":
+        cd = cooling_direction(trades, ts_signal)
+        if cd is not None:
+            if cd == "ANY" or cd == direction or not p.get("cooling_directional"):
+                direction = "FLAT"
+                gates.append("紀律冷卻：連續 2 筆停損，強制觀望（防報復性交易）")
+            else:
+                gates.append(f"冷卻期中，但訊號方向與連續虧損方向相反（市場已證明另一邊）→ 放行")
 
     # 總經事件閘門
     risk_mult = 1.0
@@ -90,13 +95,31 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
         risk = round(risk * risk_mult * gov, 2)
         plan = P.build_plan(direction, D, t, sig, state, touch, risk)
         plan["tier"] = tier
-        if plan["rr_to_res"] is not None and plan["rr_to_res"] < 1.6:
-            sig["confidence"] = max(30, sig["confidence"] - 12)
-        floor = p.get("scout_conf_floor", 48) if tier == "scout" else p["confidence_floor"]
-        if sig["confidence"] < floor:
-            gates.append(f"信心 {sig['confidence']:.0f} 低於{'試探' if tier == 'scout' else ''}門檻 {floor} → 觀望"
-                         + ("（近壓力空間不足）" if plan["warnings"] else ""))
+        # 獲利空間下限：到最近強反向級別不足 rr_floor 個 R → TP 路徑被牆擋住，不出手
+        rr_fl = p.get("rr_floor")
+        if rr_fl and plan["rr_to_res"] is not None and plan["rr_to_res"] < rr_fl:
+            side = "壓力" if direction == "LONG" else "支撐"
+            gates.append(f"到最近強{side}僅 {plan['rr_to_res']:.2f}R（下限 {rr_fl:g}R）"
+                         f"→ 獲利路徑受阻，等更好的位置")
             direction, plan, tier = "FLAT", None, None
+        # 同結構重複風險：與在途同向單的結構停損幾乎重疊 → 等於同一筆交易下兩次注
+        if direction != "FLAT" and p.get("dup_stop_atr"):
+            for tr_a in trades:
+                if tr_a["status"] in ("pending", "open") and tr_a["direction"] == direction \
+                        and abs(plan["stop"] - tr_a["plan"]["stop"]) < p["dup_stop_atr"] * plan["atr"]:
+                    lbl = "試探" if tr_a.get("tier") == "scout" else "標準"
+                    gates.append(f"與在途{lbl}單同結構（停損相距僅 {abs(plan['stop'] - tr_a['plan']['stop']):,.0f}）"
+                                 f"→ 不對同一結構重複下注")
+                    direction, plan, tier = "FLAT", None, None
+                    break
+        if direction != "FLAT":
+            if plan["rr_to_res"] is not None and plan["rr_to_res"] < 1.6:
+                sig["confidence"] = max(30, sig["confidence"] - 12)
+            floor = p.get("scout_conf_floor", 48) if tier == "scout" else p["confidence_floor"]
+            if sig["confidence"] < floor:
+                gates.append(f"信心 {sig['confidence']:.0f} 低於{'試探' if tier == 'scout' else ''}門檻 {floor} → 觀望"
+                             + ("（近壓力空間不足）" if plan["warnings"] else ""))
+                direction, plan, tier = "FLAT", None, None
 
     watch = P.watch_conditions(sig) if direction == "FLAT" else []
     return {"sig": sig, "direction": direction, "plan": plan, "tier": tier,
