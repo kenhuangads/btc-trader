@@ -106,24 +106,53 @@ def build_plan(direction: str, D, t: int, sig: dict, state: dict,
         {"name": "TP2", "price": price_rnd(avg_entry + sgn * tp2_r * dist), "frac": 0.30, "r": tp2_r,
          "action": "再平 30%，餘倉讓利潤奔跑"},
     ]
-    # TP1 擋牆前緣：獲利路徑上有比 TP1 更近的強級別 → TP1 提前到級別前緣先行入袋
-    # （價格常在強級別前反轉；把第一筆止盈擋在牆前，而不是寄望穿牆）
+    # --- 結構感知止盈（價格常在強級別前反轉：把止盈擋在牆前，而不是寄望穿牆）---
+    # 「已失效的牆」：近 2 日價格已深度穿越（≥ tp_wall_breach_atr）的級別不再算牆；
+    # 只被小幅刺穿又被打回的牆反而更硬，照算。
+    look2 = D.iloc[max(0, t - 1):t + 1]
+    breach_tol = p.get("tp_wall_breach_atr", 0.3) * atr
+
+    def _breached(px):
+        return (float(look2["high"].max()) >= px + breach_tol) if direction == "LONG" \
+            else (float(look2["low"].min()) <= px - breach_tol)
+
+    def _front(px):  # 牆的前緣（搶在牆前成交）
+        return px - sgn * 0.06 * atr
+
+    # 牆用「細群」（跨度受限）定位：粗群會把相鄰多道牆串成均價無意義的超級群
+    walls_src = sig.get("clusters_fine") or clusters
+    ahead = sorted([c for c in walls_src
+                    if sgn * (c["price"] - avg_entry) > 0.002 * avg_entry and c["strength"] >= 2],
+                   key=lambda c: sgn * c["price"])
+    # TP1：獲利路徑上第一道「仍有效」的強級別前緣；牆太近（< tp_wall_min_r，噪音就能穿）
+    # 看下一道；第一道有效牆比預設 TP1 還遠則維持預設
     if p.get("tp_wall"):
-        if direction == "LONG":
-            walls = [c["price"] for c in clusters if c["price"] > avg_entry * 1.002 and c["strength"] >= 2]
-            wall = min(walls) if walls else None
-        else:
-            walls = [c["price"] for c in clusters if c["price"] < avg_entry * 0.998 and c["strength"] >= 2]
-            wall = max(walls) if walls else None
-        if wall is not None:
-            px = wall - sgn * 0.06 * atr
-            r_new = sgn * (px - avg_entry) / dist
-            if p["tp_wall"] == "clamp":  # clamp 模式：牆再近也至少收在 +0.30R（吃反彈的一半）
-                r_new = max(r_new, 0.30)
-                px = avg_entry + sgn * r_new * dist
-            if 0.30 <= r_new < tp1_r:
-                tps[0].update({"price": price_rnd(px), "r": round(r_new, 2),
-                               "action": "平 30%（強級別前緣先行入袋），停損移保本＋啟動移動停損"})
+        min_r = p.get("tp_wall_min_r", 0.45)
+        for c in ahead:
+            if _breached(c["price"]):
+                continue
+            r_new = sgn * (_front(c["price"]) - avg_entry) / dist
+            if r_new >= tp1_r:
+                break
+            if r_new < min_r:
+                continue
+            tps[0].update({"price": price_rnd(_front(c["price"])), "r": round(r_new, 2),
+                           "action": "平 30%（強級別前緣先行入袋），停損移保本＋啟動移動停損"})
+            break
+    # TP2：最近的主級別（強度 ≥3）前緣，落在 TP1+0.3R ～ 預設 TP2 之間才採用；
+    # 超漲劇本交給 40% 尾倉的移動停損，不靠 TP2 穿越主級別
+    if p.get("tp2_struct"):
+        r1 = tps[0]["r"]
+        for c in ahead:
+            if c["strength"] < 3 or _breached(c["price"]):
+                continue
+            r_new = sgn * (_front(c["price"]) - avg_entry) / dist
+            if r_new < r1 + 0.3:
+                continue
+            if r_new < tp2_r:
+                tps[1].update({"price": price_rnd(_front(c["price"])), "r": round(r_new, 2),
+                               "action": "再平 30%（主級別前緣先行入袋），餘倉讓利潤奔跑"})
+            break
     trail_txt = f"餘倉 40% 以 {p['trail_atr_mult']:.1f}×ATR 吊燈式移動停損讓利潤奔跑（TP1 後啟動）"
     targets = []
     if direction == "LONG":

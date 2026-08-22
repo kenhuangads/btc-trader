@@ -769,6 +769,7 @@ function tradeCard(t, isOpen) {
       <div class="kv"><span>掛單價</span><b style="font-weight:500;font-size:12.5px">${t.plan.entries.map(e => fmt(e.price)).join(" / ")}</b></div>
       <div class="kv"><span>實際進場均價（用了 ${Math.round((t.filled_w || 0) * 100)}% 的計畫）</span><b>${fmt(t.avg_fill)}</b></div>
       <div class="kv"><span>停損${isOpen ? "（目前）" : ""}</span><b>${fmt(isOpen ? t.stop_now : t.plan.stop)}</b></div>
+      ${isOpen && t.plan.tps ? `<div class="kv"><span>止盈階梯</span><b style="font-weight:500;font-size:12.5px">${t.plan.tps.map(x => `${x.name} ${fmt(x.price)}(+${x.r}R)`).join(" / ")}</b></div>` : ""}
       ${exits ? `<div class="kv"><span>出場</span><b style="font-weight:500;font-size:12.5px">${exits}</b></div>` : ""}
       <div class="kv"><span>過程中最大浮盈 / 最痛回檔</span><b><span class="up">${fmtR(t.mfe_r)}</span> / <span class="down">${fmtR(t.mae_r)}</span></b></div>
       ${t.funding_r && Math.abs(t.funding_r) >= 0.005 ? `<div class="kv"><span>持倉期間資金費率</span><b class="${t.funding_r > 0 ? "up" : "down"}">${fmtR(t.funding_r)}</b></div>` : ""}

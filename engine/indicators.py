@@ -100,15 +100,21 @@ def find_wicks(df: pd.DataFrame, atr_s: pd.Series, t: int, lookback: int = 40, m
     return out
 
 
-def cluster_levels(raw: list[dict], tol_frac: float = 0.006) -> list[dict]:
-    """把相近價位合併成價位群（strength = 來源數）。raw: [{price, src}]"""
+def cluster_levels(raw: list[dict], tol_frac: float = 0.006, max_span: float | None = None) -> list[dict]:
+    """把相近價位合併成價位群（strength = 來源數）。raw: [{price, src}]
+
+    max_span：單一價位群的最大價格跨度（絕對值，通常給 ~0.45 ATR）。
+    沒有上限時相鄰價位會單鏈式一路串接，把跨度 1 ATR 的多道牆合成一個均價無意義的超級群。
+    """
     if not raw:
         return []
     raw = sorted(raw, key=lambda x: x["price"])
     clusters = []
     cur = [raw[0]]
     for item in raw[1:]:
-        if item["price"] <= cur[-1]["price"] * (1 + tol_frac):
+        linked = item["price"] <= cur[-1]["price"] * (1 + tol_frac)
+        within = max_span is None or (item["price"] - cur[0]["price"]) <= max_span
+        if linked and within:
             cur.append(item)
         else:
             clusters.append(cur)

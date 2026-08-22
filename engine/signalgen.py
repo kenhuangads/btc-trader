@@ -29,7 +29,8 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
         h4 = h4[h4["ts"] + H4_MS <= ts_signal]
         if len(h4) < 80:
             h4 = None
-    sig = F.compute_signal(D, t, state["weights"], h4=h4)
+    sig = F.compute_signal(D, t, state["weights"], h4=h4,
+                           cluster_span_atr=p.get("cluster_span_atr", 0.45))
     macro = macro_gate(ts_signal)
     gates, direction, tier = [], "FLAT", None
 
@@ -80,19 +81,23 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
 
     plan = None
     if direction != "FLAT":
-        conf = sig["confidence"]
-        if tier == "scout":
-            risk = p["risk_pct_base"] * p.get("scout_risk_mult", 0.5)
-        else:
-            risk = p["risk_pct_base"]
-            if conf >= 75:
-                risk = min(p["risk_pct_base"] * 1.3, 2.0)
-            elif conf < 62:
-                risk = p["risk_pct_base"] * 0.7
         gov = drawdown_governor(trades)
         if gov < 1.0:
             gates.append(f"回撤保護：近 10 筆累計虧損超過 3R → 風險降至 {gov:.0%}（恢復前縮小部位）")
-        risk = round(risk * risk_mult * gov, 2)
+
+        def _risk_for(conf: float) -> float:
+            """信心分級 → 風險%：試探單固定半額；標準單 ≥75 加碼 1.3x、<62 減碼 0.7x。"""
+            if tier == "scout":
+                r = p["risk_pct_base"] * p.get("scout_risk_mult", 0.5)
+            else:
+                r = p["risk_pct_base"]
+                if conf >= 75:
+                    r = min(p["risk_pct_base"] * 1.3, 2.0)
+                elif conf < 62:
+                    r = p["risk_pct_base"] * 0.7
+            return round(r * risk_mult * gov, 2)
+
+        risk = _risk_for(sig["confidence"])
         plan = P.build_plan(direction, D, t, sig, state, touch, risk)
         plan["tier"] = tier
         # 獲利空間下限：到最近強反向級別不足 rr_floor 個 R → TP 路徑被牆擋住，不出手
@@ -115,6 +120,13 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
         if direction != "FLAT":
             if plan["rr_to_res"] is not None and plan["rr_to_res"] < 1.6:
                 sig["confidence"] = max(30, sig["confidence"] - 12)
+                # 風險倍率用「扣分後」的信心重算：不能一邊警告獲利空間受限、一邊加碼
+                risk2 = _risk_for(sig["confidence"])
+                if risk2 != plan["risk_pct"]:
+                    gates.append(f"近強級別空間僅 {plan['rr_to_res']:.2f}R → 信心扣分，"
+                                 f"風險 {plan['risk_pct']}% → {risk2}%（取消加碼）")
+                    plan = P.build_plan(direction, D, t, sig, state, touch, risk2)
+                    plan["tier"] = tier
             floor = p.get("scout_conf_floor", 48) if tier == "scout" else p["confidence_floor"]
             if sig["confidence"] < floor:
                 gates.append(f"信心 {sig['confidence']:.0f} 低於{'試探' if tier == 'scout' else ''}門檻 {floor} → 觀望"

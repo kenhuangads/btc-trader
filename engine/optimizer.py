@@ -45,7 +45,11 @@ DEFAULT_STATE = {
         "rr_floor": None,              # 獲利空間下限（R）：到最近強反向級別不足此值 → 不出手（None=停用）
         "dup_stop_atr": None,          # 同結構重複風險：與在途同向單停損相距 < 此 ATR 倍數 → 不重複下注（None=停用）
         "cooling_directional": False,  # 方向化冷卻：連續停損只擋同方向訊號，反向放行
-        "tp_wall": False,              # TP1 擋牆前緣：獲利路徑上有更近的強級別 → TP1 提前到級別前緣
+        "tp_wall": True,               # TP1 擋牆前緣：路徑上第一道仍有效的強級別 → TP1 提前到級別前緣
+        "tp_wall_min_r": 0.45,         # 牆前緣不足此 R 數視為太近（噪音可穿），改看下一道牆
+        "tp_wall_breach_atr": 0.3,     # 近 2 日被穿越超過此 ATR 倍數的級別視為已失效，不再當牆
+        "tp2_struct": True,            # TP2 對齊最近主級別（強度 ≥3）前緣（介於 TP1+0.3R 與預設 TP2 之間才採用）
+        "cluster_span_atr": 0.45,      # 止盈擋牆用的細群最大跨度（ATR 倍數）；因子/掛單仍用無上限粗群（消融證實較優）
     },
     "weights": {"trend_daily": 1.0, "trend_4h": 0.8, "momentum": 0.7, "funding": 0.9,
                 "oi_price": 0.9, "taker_flow": 0.6, "rvol": 0.5, "wick_magnet": 0.5,

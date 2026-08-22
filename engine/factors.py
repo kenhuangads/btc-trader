@@ -289,8 +289,10 @@ def f_squeeze(D, t):
 
 
 # ---------------------------------------------------------------- 價位群建構
-def build_clusters(D, t, wicks) -> list[dict]:
+def build_clusters(D, t, wicks, span_atr: float | None = 0.45) -> list[dict]:
     c = float(D["close"].iloc[t])
+    a = _v(D, t, "atr")
+    max_span = span_atr * a if (span_atr and a) else None
     raw = []
     for lv in ind.round_levels(c):
         if abs(lv - c) / c < 0.12:
@@ -310,7 +312,7 @@ def build_clusters(D, t, wicks) -> list[dict]:
     for w in wicks:
         if not w["filled"]:
             raw.append({"price": w["mid"], "src": "影線50%"})
-    clusters = ind.cluster_levels(raw)
+    clusters = ind.cluster_levels(raw, max_span=max_span)
     return [x for x in clusters if abs(x["price"] - c) / c < 0.15]
 
 
@@ -319,9 +321,12 @@ FACTOR_FNS = ["trend_daily", "trend_4h", "momentum", "funding", "oi_price",
               "taker_flow", "rvol", "wick_magnet", "levels", "squeeze_setup"]
 
 
-def compute_signal(D, t, weights: dict, h4=None) -> dict:
+def compute_signal(D, t, weights: dict, h4=None, cluster_span_atr: float | None = 0.45) -> dict:
     wicks = ind.find_wicks(D, D["atr"], t)
-    clusters = build_clusters(D, t, wicks)
+    # 粗群（無跨度上限）：因子評分／掛單吸附／rr 檢查沿用——因子權重與閘門在此行為上校準，
+    # 消融證實改成細群會劣化整體出手集合。細群（跨度 ≤ cluster_span_atr）只供止盈擋牆定位。
+    clusters = build_clusters(D, t, wicks, span_atr=None)
+    clusters_fine = build_clusters(D, t, wicks, span_atr=cluster_span_atr) if cluster_span_atr else None
     facs = [
         f_trend_daily(D, t),
         f_trend_4h(h4, None),
@@ -349,4 +354,5 @@ def compute_signal(D, t, weights: dict, h4=None) -> dict:
     conf = float(np.clip(conf, 30, 95))
     return {"score": round(float(score), 1), "confidence": round(conf, 0),
             "factors": facs, "agree": round(agree, 2), "missing": missing,
-            "clusters": clusters, "wicks": [w for w in wicks if not w["filled"]]}
+            "clusters": clusters, "clusters_fine": clusters_fine,
+            "wicks": [w for w in wicks if not w["filled"]]}
