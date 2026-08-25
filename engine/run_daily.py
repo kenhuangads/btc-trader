@@ -1,8 +1,17 @@
-"""每日主流程：抓數據 → 更新在途交易（1h 重播）→ 產生今日訊號 → 調參 → 輸出儀表板 JSON。
+"""每日主流程：抓數據 → 更新在途交易（1h 重播）→ 產生／沿用今日訊號 → 調參 → 輸出儀表板 JSON。
+
+排程一天跑 6 次（每 4 小時），但**一個 signal_date 只定案一次**：
+  · 當日第一輪（日 K 收盤後）：跑 signalgen.decide()，把方向／tier／計畫／分數／因子／閘門
+    連同「已收盤日 K 的價格摘要」寫進 state/signal_lock.json 凍結。
+  · 其餘每 4 小時：沿用凍結的決策，只重跑「在途單 1h 重播、盤中提醒、統計復盤、推播、調參」。
+
+為什麼要凍結（實測，非推測）：訊號的事實基礎是「已收盤的日 K」，盤中不該改變；
+但沒有這道鎖時同一個 signal_date 會被三種盤中變動改寫（見 signal_lock 段落的註解）。
 
 用法：
-  python -m engine.run_daily              # 每日更新（首次自動回測建立基準）
-  python -m engine.run_daily --bootstrap  # 強制重跑回測（重建統計與權重）
+  python -m engine.run_daily                   # 每 4h 更新（首次自動回測建立基準）
+  python -m engine.run_daily --bootstrap       # 強制重跑回測（重建統計與權重，並重新定案今日訊號）
+  python -m engine.run_daily --refresh-signal  # 解鎖今日訊號重新定案（僅供盤中修好程式後手動補跑）
 """
 import copy
 import sys
@@ -19,6 +28,8 @@ from . import optimizer as OPT
 from . import review as R
 from . import signalgen as SG
 from .util import DATA, DAY_MS, STATE, jdump, jload, log, now_ms, taipei_str, ts_to_date
+
+SIGNAL_LOCK = STATE / "signal_lock.json"
 
 
 def condensed_trade(tr: dict) -> dict:
@@ -38,6 +49,20 @@ def condensed_trade(tr: dict) -> dict:
                      "risk_pct": plan["risk_pct"], "leverage": plan["leverage"],
                      "stop_pct": plan["stop_pct"], "dist": plan["dist"]},
             "stop_now": tr["stop_now"]}
+
+
+def price_block(D, t: int) -> dict:
+    """已收盤日 K 的價格摘要——它是訊號的事實基礎，因此與訊號一起凍結。
+
+    盤中重跑時 K 線來源可能容錯切換（okx ↔ binance），同一根日 K 的收盤會差幾美元；
+    讓它跟著訊號凍結，畫面上的「收盤／漲跌幅」才會與當時的決策對得起來。
+    """
+    closes = D["close"]
+    return {"close": float(closes.iloc[t]), "atr": float(D["atr"].iloc[t]),
+            "chg_1d": round(float(closes.iloc[t] / closes.iloc[t - 1] - 1) * 100, 2),
+            "chg_7d": round(float(closes.iloc[t] / closes.iloc[t - 7] - 1) * 100, 2),
+            "funding": (float(D["funding"].iloc[t]) if not np.isnan(D["funding"].iloc[t]) else None),
+            "oi": (float(D["oi"].iloc[t]) if not np.isnan(D["oi"].iloc[t]) else None)}
 
 
 def make_headline(res: dict, plan_tracked: bool = True) -> str:
@@ -75,6 +100,7 @@ def make_headline(res: dict, plan_tracked: bool = True) -> str:
 
 def main() -> int:
     bootstrap_flag = "--bootstrap" in sys.argv
+    refresh_flag = "--refresh-signal" in sys.argv
     state = jload(STATE / "model_state.json") or copy.deepcopy(OPT.DEFAULT_STATE)
     OPT.ensure_defaults(state)
     trades = jload(STATE / "trades.json") or []
@@ -135,45 +161,104 @@ def main() -> int:
     if touch.get("lookback") != lb or dt.datetime.now(dt.timezone.utc).weekday() == 6:
         touch = OPT.touch_prob_table(D, lookback=lb)
     res = SG.decide(D, t, state, trades, touch, h4=m["h4"])
-    sig, plan = res["sig"], res["plan"]
     signal_date = ts_to_date(res["signal_ts"])
+    price = price_block(D, t)
+
+    # ---- 訊號凍結：一個 signal_date 只定案一次 ----
+    # 訊號的事實基礎是「已收盤的日 K」，盤中不該改變。沒有這道鎖時（實測 48 個 signal_date、
+    # 235 組同程式碼的相鄰輪次）有 3 天在同一天內翻過方向、9 天分數飄移過，成因有三：
+    #   1) 閘門讀在途單的即時狀態——冷卻（看最後兩筆結案的 exit_ts）、回撤保護、同結構閘門，
+    #      而 1h 重播會在盤中改變這些狀態（8/20 FLAT→LONG→FLAT、8/22 LONG→FLAT 都是這條）
+    #   2) 每輪重抓數據：K 線來源容錯切換讓同一根日 K 收盤差幾美元、衍生品序列被交易所回補
+    #      讓 180 日分位跨過門檻 → 分數飄移（7/16 分數 11.5→15.4 跨過試探門檻而翻多）
+    #   3) 優化器每輪都可能調權重／參數、觸價曲線每週日重算 → 分數與掛單價飄移（8/13）
+    # 凍結後仍每輪更新的：在途單 1h 重播、盤中提醒、統計與復盤、推播、調參（明日生效）。
+    lock = jload(SIGNAL_LOCK) or {}
+    frozen = bool(not need_bootstrap and not refresh_flag
+                  and lock.get("signal_date") == signal_date and lock.get("res"))
+    if frozen:
+        res = lock["res"]
+        price = lock.get("price") or price
+        log(f"訊號已於 {lock.get('decided_taipei')} 定案（{res['direction']}）"
+            f"→ 本輪沿用凍結決策，只更新在途單追蹤與提醒")
+    elif refresh_flag and lock.get("signal_date") == signal_date:
+        log(f"--refresh-signal：解除 {signal_date} 的訊號鎖，重新定案")
+    sig, plan = res["sig"], res["plan"]
+
     if not factor_history or factor_history[-1]["ts"] != int(D["ts"].iloc[t]):
         factor_history.append({"date": signal_date, "ts": int(D["ts"].iloc[t]),
                                "scores": {f["name"]: f["score"] for f in sig["factors"] if f["ok"]}})
         factor_history = factor_history[-500:]
 
     active = [tr for tr in trades if tr["status"] in ("pending", "open")]
-    already_today = any(tr["date"] == signal_date for tr in trades)
-    position_note = None
     new_live_trade = None
-    plan_tracked = False
-    if res["direction"] != "FLAT":
-        tier_label = "試探" if res["tier"] == "scout" else "標準"
-        slot_taken = any(tr.get("tier", "standard") == res["tier"] for tr in active)
-        if not slot_taken and not already_today:
-            new_live_trade = R.new_trade(plan, sig, "live")
-            trades.append(new_live_trade)
-            log(f"新增推薦單：{res['direction']}（{tier_label}單）信心 {sig['confidence']:.0f}")
-        elif slot_taken:
-            same = next(tr for tr in active if tr.get("tier", "standard") == res["tier"])
-            if same["direction"] == res["direction"]:
-                position_note = f"{tier_label}倉位已有同向在途部位 → 不重複開倉"
-            elif sig["confidence"] < 70:
-                position_note = f"{tier_label}倉位有反向部位、反向訊號信心不足 70 → 續抱原計畫"
-        # 高信心反向訊號 → 所有反向在倉單提前離場（跨層級）
-        if sig["confidence"] >= 70:
-            for tr in active:
-                if tr["status"] == "open" and tr["direction"] != res["direction"]:
-                    tr["force_exit"] = True
-                    position_note = ((position_note + "；") if position_note else "") + \
-                        f"高信心反向訊號 → 在途 {tr['direction']} 單將於下一根開盤離場"
-        # 這份計畫是否真的被系統追蹤（有建單＝有停損管理、有復盤、有成交/結案推播）。
-        # 訊號成立但因倉位佔用而未建單時，畫面必須明說「僅供參考」——否則等於叫使用者
-        # 去掛一張系統根本不會管的單。
-        plan_tracked = any(tr["date"] == signal_date and tr["mode"] == "live" for tr in trades)
-        if not plan_tracked:
-            position_note = ((position_note + "；") if position_note else "") + \
-                "本計畫僅供參考：系統未建單追蹤（無停損管理、無成交與結案推播）"
+    if frozen:
+        # 「建不建單」同樣屬於決策，只有定案那一輪能建：否則盤中倉位一空出來，就會拿早上的
+        # 計畫價去追一張已經過時的單。回測一天只決策一次，實盤必須對齊同一口徑。
+        decision_note = lock.get("position_note")
+        plan_tracked = bool(lock.get("plan_tracked"))
+    else:
+        decision_note = None
+        plan_tracked = False
+        already_today = any(tr["date"] == signal_date for tr in trades)
+        if res["direction"] != "FLAT":
+            tier_label = "試探" if res["tier"] == "scout" else "標準"
+            slot_taken = any(tr.get("tier", "standard") == res["tier"] for tr in active)
+            if not slot_taken and not already_today:
+                new_live_trade = R.new_trade(plan, sig, "live")
+                trades.append(new_live_trade)
+                active.append(new_live_trade)
+                log(f"新增推薦單：{res['direction']}（{tier_label}單）信心 {sig['confidence']:.0f}")
+            elif slot_taken:
+                same = next(tr for tr in active if tr.get("tier", "standard") == res["tier"])
+                if same["direction"] == res["direction"]:
+                    decision_note = f"{tier_label}倉位已有同向在途部位 → 不重複開倉"
+                elif sig["confidence"] < 70:
+                    decision_note = f"{tier_label}倉位有反向部位、反向訊號信心不足 70 → 續抱原計畫"
+            # 這份計畫是否真的被系統追蹤（有建單＝有停損管理、有復盤、有成交/結案推播）。
+            # 訊號成立但因倉位佔用而未建單時，畫面必須明說「僅供參考」——否則等於叫使用者
+            # 去掛一張系統根本不會管的單。比對方向：--refresh-signal 改判反向時，早上那張
+            # 反向單不能算成「這份計畫有被追蹤」。
+            plan_tracked = any(tr["date"] == signal_date and tr["mode"] == "live"
+                               and tr["direction"] == res["direction"] for tr in trades)
+            if not plan_tracked:
+                decision_note = ((decision_note + "；") if decision_note else "") + \
+                    "本計畫僅供參考：系統未建單追蹤（無停損管理、無成交與結案推播）"
+
+    # 高信心反向訊號 → 所有反向在倉單提前離場（跨層級）。
+    # 這條每輪都跑、不凍結：它是「在途單風險管理」而非訊號本身——盤中才成交的反向單也必須
+    # 被保護到。旗標只會 False → True，且提示由當下狀態推導，重跑不會翻動。
+    force_note = None
+    if res["direction"] != "FLAT" and sig["confidence"] >= 70:
+        for tr in active:
+            if tr["status"] == "open" and tr["direction"] != res["direction"]:
+                tr["force_exit"] = True
+        hit = next((tr for tr in active if tr["status"] == "open" and tr.get("force_exit")
+                    and tr["direction"] != res["direction"]), None)
+        if hit:
+            force_note = f"高信心反向訊號 → 在途 {hit['direction']} 單將於下一根開盤離場"
+    position_note = "；".join(x for x in (decision_note, force_note) if x) or None
+
+    # ---- 寫回訊號鎖 ----
+    # 資料降級（衍生品來源全掛）時不凍結：寧可下一輪用完整資料重新定案，
+    # 也不要把一份缺因子的決策鎖一整天。
+    if frozen:
+        lock["rounds"] = int(lock.get("rounds", 1)) + 1
+        lock["last_run_taipei"] = taipei_str(now_ms())
+        jdump(lock, SIGNAL_LOCK)
+    elif m["src_deriv"] == "none":
+        log("衍生品資料全數缺漏 → 本輪不凍結訊號，下一輪重新定案")
+        lock = {"decided_taipei": taipei_str(now_ms()), "rounds": 1}
+    else:
+        lock = {"signal_date": signal_date, "signal_ts": res["signal_ts"],
+                "decided_at": now_ms(), "decided_taipei": taipei_str(now_ms()),
+                "rounds": 1, "version": state["version"],
+                "weights": dict(state["weights"]),
+                "src": {"klines": m["src_klines"], "deriv": m["src_deriv"]},
+                "trade_id": new_live_trade["id"] if new_live_trade else None,
+                "plan_tracked": plan_tracked, "position_note": decision_note,
+                "price": price, "res": res}
+        jdump(lock, SIGNAL_LOCK)
 
     # ---------------- 迭代優化 ----------------
     tune_logs = OPT.maybe_tune(state, trades, factor_history, D, now_ms())
@@ -185,7 +270,6 @@ def main() -> int:
     equity = R.equity_curve(trades)
     edges = OPT.factor_edges(factor_history, D)
 
-    closes = D["close"]
     alerts = AL.build_alerts(D, t, sig, trades, m, now_ms())
 
     # ---------------- 手機推播（ntfy／Telegram；未設定即停用，失敗不影響流程） ----------------
@@ -239,20 +323,21 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001
             log(f"推播失敗（不影響流程）：{e}")
 
+    sig_weights = lock.get("weights") or state["weights"]
     latest = {
         "generated_at": now_ms(), "generated_taipei": taipei_str(now_ms()),
         "signal_date": signal_date, "stale": False, "alerts": alerts,
         "src": {"klines": m["src_klines"], "deriv": m["src_deriv"]},
-        "price": {"close": float(closes.iloc[t]), "atr": float(D["atr"].iloc[t]),
-                  "chg_1d": round(float(closes.iloc[t] / closes.iloc[t - 1] - 1) * 100, 2),
-                  "chg_7d": round(float(closes.iloc[t] / closes.iloc[t - 7] - 1) * 100, 2),
-                  "funding": (float(D["funding"].iloc[t]) if not np.isnan(D["funding"].iloc[t]) else None),
-                  "oi": (float(D["oi"].iloc[t]) if not np.isnan(D["oi"].iloc[t]) else None)},
+        "price": price,
+        "signal_rounds": lock.get("rounds", 1),
         "signal": {"direction": res["direction"], "score": sig["score"],
                    "tier": res.get("tier"),
                    "headline": make_headline(res, plan_tracked),
+                   "decided_taipei": lock.get("decided_taipei"),
                    "confidence": sig["confidence"], "agree": sig["agree"],
-                   "factors": [{**f, "weight": state["weights"].get(f["name"], 1.0)} for f in sig["factors"]],
+                   # 權重取「定案當時」那一份：優化器盤中可能調權重，但凍結的分數是用舊權重
+                   # 算出來的，畫面若混用兩份，使用者會看到對不起來的因子貢獻。
+                   "factors": [{**f, "weight": sig_weights.get(f["name"], 1.0)} for f in sig["factors"]],
                    "gates": res["gates"], "watch": res["watch"], "plan": plan,
                    "position_note": position_note, "plan_tracked": plan_tracked,
                    "macro": res["macro"]},
@@ -286,7 +371,10 @@ def main() -> int:
            "version": state["version"], "recent_changes": tune_logs},
           DATA / "optimizer.json")
 
+    # 封存檔記的是「這一天的訊號」，時間戳用定案時間而非本輪執行時間；
+    # 凍結之後同一個 signal_date 的封存檔就會逐位元穩定，不再每 4h 被改寫。
     arch = {k: latest[k] for k in ("signal_date", "price", "signal", "levels", "generated_taipei")}
+    arch["generated_taipei"] = lock.get("decided_taipei") or latest["generated_taipei"]
     jdump(arch, DATA / "archive" / f"{signal_date}.json")
     idx = jload(DATA / "archive" / "index.json") or []
     if signal_date not in idx:

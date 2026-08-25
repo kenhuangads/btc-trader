@@ -2,13 +2,21 @@ name: daily-update
 
 on:
   schedule:
-    # 00:07 UTC（台北 08:07）＝ 日K收盤後產生當日訊號；
-    # 其餘每 4 小時（4H K 收盤後）僅追蹤在途單狀態（訊號不變，冪等）
+    # 00:07 UTC（台北 08:07）＝ 日 K 收盤後的第一輪，當日訊號在此定案並寫入
+    # state/signal_lock.json 凍結（方向／tier／計畫／分數／因子／閘門／收盤價都不再改）。
+    # 其餘每 4 小時（4H K 收盤後）沿用凍結的訊號，只重跑：在途單 1h 重播、盤中提醒、
+    # 統計復盤、手機推播、調參（明日生效）。
+    # 註：這是「凍結」而非「天生冪等」——引擎每輪都會重抓資料，若不鎖住，閘門讀到的在途單
+    # 狀態、容錯切換後的 K 線來源、被交易所回補的衍生品序列都會讓同一天的訊號翻動。
     - cron: "7 0,4,8,12,16,20 * * *"
   workflow_dispatch:
     inputs:
       bootstrap:
-        description: "強制重跑回測（重建統計與權重）"
+        description: "強制重跑回測（重建統計與權重；一併重新定案今日訊號）"
+        type: boolean
+        default: false
+      refresh_signal:
+        description: "解除今日訊號鎖，用現在的程式碼與資料重新定案（盤中修好程式後才用）"
         type: boolean
         default: false
 
@@ -41,7 +49,8 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           ARGS=""
-          if [ "${{ inputs.bootstrap }}" = "true" ]; then ARGS="--bootstrap"; fi
+          if [ "${{ inputs.bootstrap }}" = "true" ]; then ARGS="$ARGS --bootstrap"; fi
+          if [ "${{ inputs.refresh_signal }}" = "true" ]; then ARGS="$ARGS --refresh-signal"; fi
           python -m engine.run_daily $ARGS
 
       - name: Commit & push

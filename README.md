@@ -52,8 +52,8 @@ GitHub Actions 全自動抓取市場數據 → 多因子引擎產生**做多／�
 ## 架構
 
 ```
-GitHub Actions（每日 00:07 UTC）
-  └─ engine/run_daily.py
+GitHub Actions（每 4 小時：00:07 / 04:07 / … UTC）
+  └─ engine/run_daily.py   ← 訊號在當日第一輪定案並凍結，其餘輪次只追蹤在途單與提醒
       ├─ fetchers.py     多來源容錯：K線 Binance→OKX→Bybit；衍生品固定 OKX 優先（CI 美國節點連不上 Binance）
       ├─ factors.py      10 因子 + 綜合分數/信心
       ├─ signalgen.py    紀律閘門（逆勢/冷卻/總經事件/信心門檻）
@@ -66,6 +66,7 @@ GitHub Actions（每日 00:07 UTC）
   → 產出 docs/data/*.json 並 commit → GitHub Pages 靜態儀表板（PWA）
 ```
 
+- `state/signal_lock.json` 當日訊號鎖：訊號的事實基礎是**已收盤的日 K**，同一個訊號日只定案一次，盤中重跑不得改寫方向／tier／計畫（739 日 walk-forward A/B：不鎖時有 3.8% 的日子會盤中翻動，總 R +2.85 → +5.11、獲利因子 1.22 → 1.56）
 - `state/` 模型權重、參數、全部交易紀錄（可審計）；`history/` 逐日累積衍生品數據，倉庫本身就是資料庫
 - 前端零框架、零建置（`docs/`），支援深/淺色、離線快取、iOS/Android 加入主畫面
 
@@ -73,8 +74,9 @@ GitHub Actions（每日 00:07 UTC）
 
 ```bash
 pip install -r requirements.txt
-python -m engine.run_daily              # 每日更新
-python -m engine.run_daily --bootstrap  # 重建回測基準
+python -m engine.run_daily                   # 每 4h 更新（當日第一輪定案，其後沿用）
+python -m engine.run_daily --bootstrap       # 重建回測基準
+python -m engine.run_daily --refresh-signal  # 解除今日訊號鎖重新定案（盤中修好程式後才用）
 python -m http.server 8123 -d docs     # http://localhost:8123 預覽
 ```
 
