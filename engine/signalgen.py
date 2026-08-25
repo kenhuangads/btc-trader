@@ -2,22 +2,13 @@
 
 回測與每日實盤共用同一條路徑，確保復盤統計與線上推薦口徑一致。
 """
-from .util import DAY_MS
+from .util import DAY_MS, ts_to_date
 from . import factors as F
 from . import planner as P
 from .macro import macro_gate
-from .review import cooling_direction
+from .review import cooling_direction, residual_risk_r
 
 H4_MS = DAY_MS // 6
-
-
-def dup_live_stop(tr: dict) -> float:
-    """在途單「目前實際生效」的停損。
-
-    保本/棘輪/移動停損上移後，plan["stop"] 這個原始結構停損早已作廢——
-    同結構重複風險要看的是兩單會不會同生共死，因此必須用 stop_now。
-    """
-    return tr.get("stop_now", tr["plan"]["stop"])
 
 
 def drawdown_governor(trades: list[dict]) -> float:
@@ -116,19 +107,24 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
             gates.append(f"到最近強{side}僅 {plan['rr_to_res']:.2f}R（下限 {rr_fl:g}R）"
                          f"→ 獲利路徑受阻，等更好的位置")
             direction, plan, tier = "FLAT", None, None
-        # 同結構重複風險：與在途同向單「目前實際生效」的停損幾乎重疊 → 等於同一筆交易下兩次注。
-        # 必須比 stop_now 而非 plan["stop"]：保本/棘輪/移動停損上移後，原始結構停損早已作廢，
-        # 兩單不再同生共死（在途單先出場時新單仍有完整風險距離），拿過期風險封鎖等於白白錯過機會。
-        # 未成交的在途單 stop_now == plan["stop"]，行為與原設計一致（8/16+8/17 雙損情境仍被攔截）。
+        # 同結構重複風險：與在途同向單押在同一個結構停損上 → 一根 K 打掉兩筆。
+        # 比對雙方的「原始結構停損」（結構語意，不受保本/移動停損位移影響）；
+        # 但在途單若已卸險（停損移到保本以上、或部分止盈後剩餘風險很低），
+        # 它已不可能再賠錢，就不該再佔用新機會的額度 → 直接跳過檢查。
         if direction != "FLAT" and p.get("dup_stop_atr"):
+            sig_date = ts_to_date(ts_signal)
+            risk_floor = p.get("dup_risk_floor", 0.5)
             for tr_a in trades:
                 if tr_a["status"] not in ("pending", "open") or tr_a["direction"] != direction:
                     continue
-                live_stop = dup_live_stop(tr_a)
-                gap = abs(plan["stop"] - live_stop)
+                if tr_a["date"] == sig_date:
+                    continue  # 同一訊號日自己剛建的單，交由「層級佔位」規則處理
+                if residual_risk_r(tr_a) < risk_floor:
+                    continue  # 已卸險：不再視為重複下注
+                gap = abs(plan["stop"] - tr_a["plan"]["stop"])
                 if gap < p["dup_stop_atr"] * plan["atr"]:
                     lbl = "試探" if tr_a.get("tier") == "scout" else "標準"
-                    gates.append(f"與在途{lbl}單同結構（停損相距僅 {gap:,.0f}）"
+                    gates.append(f"與在途{lbl}單同結構（結構停損相距僅 {gap:,.0f}）"
                                  f"→ 不對同一結構重複下注")
                     direction, plan, tier = "FLAT", None, None
                     break
