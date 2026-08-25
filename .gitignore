@@ -6,3 +6,4 @@ venv/
 scratch/
 *.log
 .claude/settings.local.json
+.cache/

@@ -77,8 +77,24 @@ pip install -r requirements.txt
 python -m engine.run_daily                   # 每 4h 更新（當日第一輪定案，其後沿用）
 python -m engine.run_daily --bootstrap       # 重建回測基準
 python -m engine.run_daily --refresh-signal  # 解除今日訊號鎖重新定案（盤中修好程式後才用）
-python -m http.server 8123 -d docs     # http://localhost:8123 預覽
+python -m http.server 8123 -d docs           # http://localhost:8123 預覽
 ```
+
+## 驗證工具（`tools/`）
+
+改動上線前的標準流程：**pin 住輸入 → 跑 A/B → 用 production 程式碼路徑重現數字**。
+每次抓取的資料其實都不一樣（K 線來源會容錯切換、OKX 只回約 180 天由 csv 回補、
+交易所會回補舊資料），不先固定輸入的話，A/B 的差異可能只是抓取抖動。
+
+```bash
+python -m tools.market_snapshot save         # 抓一次市場資料存成快照（.cache/，已 gitignore）
+python -m tools.ab_signal_freeze             # 全歷史 walk-forward A/B：每輪決策 vs 訊號凍結
+python -m tools.pinned_run [--bootstrap]     # 用快照跑 production run_daily（parity／回歸測試）
+```
+
+`pinned_run` 會就地覆寫 `state/` 與 `docs/data/`，因此在有 `.git` 的目錄會直接拒絕執行；
+請先把 `engine state history docs tools` 複製成沙箱再跑。A/B 腳本會輸出逐年拆解與
+「差異來自哪幾筆單」，用來判斷改善是分散的還是被一兩筆撐起來的。
 
 ## 手機推播通知
 
