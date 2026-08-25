@@ -11,6 +11,15 @@ from .review import cooling_direction
 H4_MS = DAY_MS // 6
 
 
+def dup_live_stop(tr: dict) -> float:
+    """在途單「目前實際生效」的停損。
+
+    保本/棘輪/移動停損上移後，plan["stop"] 這個原始結構停損早已作廢——
+    同結構重複風險要看的是兩單會不會同生共死，因此必須用 stop_now。
+    """
+    return tr.get("stop_now", tr["plan"]["stop"])
+
+
 def drawdown_governor(trades: list[dict]) -> float:
     """回撤保護：近 10 筆已結案累計 < -3R → 風險縮到 0.6 倍（隨窗口滾動自動恢復）。
     專家共識（Tharp/Druckenmiller）：手感最差的時候部位要最小。"""
@@ -107,13 +116,19 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
             gates.append(f"到最近強{side}僅 {plan['rr_to_res']:.2f}R（下限 {rr_fl:g}R）"
                          f"→ 獲利路徑受阻，等更好的位置")
             direction, plan, tier = "FLAT", None, None
-        # 同結構重複風險：與在途同向單的結構停損幾乎重疊 → 等於同一筆交易下兩次注
+        # 同結構重複風險：與在途同向單「目前實際生效」的停損幾乎重疊 → 等於同一筆交易下兩次注。
+        # 必須比 stop_now 而非 plan["stop"]：保本/棘輪/移動停損上移後，原始結構停損早已作廢，
+        # 兩單不再同生共死（在途單先出場時新單仍有完整風險距離），拿過期風險封鎖等於白白錯過機會。
+        # 未成交的在途單 stop_now == plan["stop"]，行為與原設計一致（8/16+8/17 雙損情境仍被攔截）。
         if direction != "FLAT" and p.get("dup_stop_atr"):
             for tr_a in trades:
-                if tr_a["status"] in ("pending", "open") and tr_a["direction"] == direction \
-                        and abs(plan["stop"] - tr_a["plan"]["stop"]) < p["dup_stop_atr"] * plan["atr"]:
+                if tr_a["status"] not in ("pending", "open") or tr_a["direction"] != direction:
+                    continue
+                live_stop = dup_live_stop(tr_a)
+                gap = abs(plan["stop"] - live_stop)
+                if gap < p["dup_stop_atr"] * plan["atr"]:
                     lbl = "試探" if tr_a.get("tier") == "scout" else "標準"
-                    gates.append(f"與在途{lbl}單同結構（停損相距僅 {abs(plan['stop'] - tr_a['plan']['stop']):,.0f}）"
+                    gates.append(f"與在途{lbl}單同結構（停損相距僅 {gap:,.0f}）"
                                  f"→ 不對同一結構重複下注")
                     direction, plan, tier = "FLAT", None, None
                     break
