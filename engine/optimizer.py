@@ -43,7 +43,8 @@ DEFAULT_STATE = {
         "max_hold_days": 7,
         "max_leverage": 5,
         "rr_floor": None,              # 獲利空間下限（R）：到最近強反向級別不足此值 → 不出手（None=停用）
-        "dup_stop_atr": None,          # 同結構重複風險：與在途同向單停損相距 < 此 ATR 倍數 → 不重複下注（None=停用）
+        "dup_stop_atr": None,          # 同結構重複風險：與在途同向單結構停損相距 < 此 ATR 倍數 → 不重複下注（None=停用）
+        "dup_risk_floor": 0.5,         # 在途單剩餘風險低於此 R 數視為已卸險，不再佔用同結構額度
         "cooling_directional": False,  # 方向化冷卻：連續停損只擋同方向訊號，反向放行
         "tp_wall": True,               # TP1 擋牆前緣：路徑上第一道仍有效的強級別 → TP1 提前到級別前緣
         "tp_wall_min_r": 0.45,         # 牆前緣不足此 R 數視為太近（噪音可穿），改看下一道牆

@@ -246,7 +246,8 @@ function renderLadder() {
     H = 420;
     const sgn = plan.direction === "LONG" ? 1 : -1;
     const eWord = plan.direction === "LONG" ? "買點" : "空點";
-    title = `進出場地圖 <span class="hint">${plan.direction === "LONG" ? "做多" : "做空"}計畫 · 照著掛單即可</span>`;
+    const tracked = LATEST.signal.plan_tracked !== false;
+    title = `進出場地圖 <span class="hint">${plan.direction === "LONG" ? "做多" : "做空"}計畫 · ${tracked ? "照著掛單即可" : "⚠ 僅供參考，系統未追蹤"}</span>`;
     plan.tps.slice().reverse().forEach((t, idx) => {
       const i = plan.tps.length - idx;
       rows.push({ p: t.price, col: green, chip: `🎯 目標${i}（+${t.r}R）`, sub: i === 1 ? "平30%＋停損移到成本" : "平30%＋啟動移動停損" });
@@ -433,6 +434,7 @@ function renderCalcMaybe() {
         `<div class="hint" style="margin:4px 0 0">一樣選「限價單」：價格填止盈價、數量照上，<b>勾「只減倉」</b>再按「${closeBtn}」——有勾只減倉就是平倉，不會反向開新倉。剩下約 ${f3(runnerQ)} BTC 先不掛，留給移動停損跟跑。</div>`;
     }
     $("#calc-order").innerHTML = `
+      ${LATEST.signal.plan_tracked === false ? `<div class="hint-block" style="color:var(--amber);margin:14px 0 6px">⚠ <b>今日未建單，這份計畫僅供參考</b>——倉位已被在途單佔用，系統不會追蹤這份計畫（沒有停損管理、成交與結案推播）。要看真正在追蹤的部位請切到「復盤 → 持倉追蹤」。</div>` : ""}
       <div class="card-title" style="margin:14px 0 6px">照這個下單（幣安版）<span class="hint">照抄到幣安 App 合約；模擬建議，不會自動幫你下單</span></div>
       <div class="hint" style="margin:0 0 2px">你的設定：本金 ${fmt(eq)} U · 敢虧 ${risk}%（≈${fmt(riskUsd, 0)} U）· 槓桿 ${lev}x → 全部成交約需保證金 ${fmt(margin, 0)} U（每張約 ${rungMargin} U）。<b>改槓桿只會變保證金與強平價——下面的價格與數量都不變</b>（倉位大小由「敢虧多少」決定，想改數量請調本金或敢虧%）。</div>
       ${levGate}

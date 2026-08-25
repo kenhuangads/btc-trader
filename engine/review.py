@@ -51,6 +51,30 @@ def _remaining(tr):
     return max(0.0, fw - sum(e["frac"] for e in tr["exits"]))
 
 
+def residual_risk_r(tr: dict) -> float:
+    """在途單「還剩多少 R 的實質資本風險」。
+
+    未成交＝1.0（全額風險仍在）；停損移到保本≈0；棘輪(-0.25R)≈0.25；
+    部分止盈後按剩餘倉位等比縮小。供紀律閘門判斷「這張單是否還會賠錢」，
+    比單看停損價更精準——已卸險的單不該再佔用新機會的額度。
+
+    註：本值依賴 process_trade 推進的 stop_now/fills，因此回測（日K重播）與
+    實盤（1h重播）在同一天可能得到不同結果，屬此設計的固有取捨。
+    """
+    if tr["status"] == "pending" or not tr["fills"]:
+        return 1.0
+    sgn = 1 if tr["direction"] == "LONG" else -1
+    avg, fw = _avg_fill(tr)
+    dist = tr["plan"].get("dist")
+    if not fw or not avg or not dist:
+        return 1.0
+    stop = tr.get("stop_now")
+    if not isinstance(stop, (int, float)) or stop != stop or stop <= 0:
+        stop = tr["plan"]["stop"]
+    at_risk = max(0.0, sgn * (avg - stop) / dist)
+    return at_risk * (_remaining(tr) / fw)
+
+
 def _raise_stop(tr: dict, sgn: int, cand: float, src: str) -> None:
     """只朝有利方向移動停損；記錄來源供出場原因判讀。"""
     better = cand > tr["stop_now"] if sgn == 1 else cand < tr["stop_now"]

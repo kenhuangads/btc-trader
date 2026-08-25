@@ -40,15 +40,22 @@ def condensed_trade(tr: dict) -> dict:
             "stop_now": tr["stop_now"]}
 
 
-def make_headline(res: dict) -> str:
-    """給新手看的一句白話結論。"""
+def make_headline(res: dict, plan_tracked: bool = True) -> str:
+    """給新手看的一句白話結論。
+
+    plan_tracked=False 代表訊號成立但系統沒有建單（倉位已被佔用）——
+    此時不可再喊「掛限價單」，否則使用者會去掛一張系統不追蹤的單。
+    """
     d = res["direction"]
     gates = " ".join(res["gates"])
     scout = res.get("tier") == "scout"
-    if d == "LONG":
-        return ("輕倉試探偏多（半倉）：訊號夠好但未到滿分，用一半風險掛單等回檔" if scout
-                else "偏多佈局：在下方掛限價單等回檔便宜接，跌破停損就認錯出場")
-    if d == "SHORT":
+    if d in ("LONG", "SHORT"):
+        side = "多" if d == "LONG" else "空"
+        if not plan_tracked:
+            return f"今日判讀偏{side}，但倉位已被在途單佔用 → 不重複開倉，下方計畫僅供參考"
+        if d == "LONG":
+            return ("輕倉試探偏多（半倉）：訊號夠好但未到滿分，用一半風險掛單等回檔" if scout
+                    else "偏多佈局：在下方掛限價單等回檔便宜接，跌破停損就認錯出場")
         return ("輕倉試探偏空（半倉）：訊號夠好但未到滿分，用一半風險掛單等反彈" if scout
                 else "偏空佈局：在上方掛限價單等反彈再空，突破停損就認錯出場")
     # 已有在途單佔位（同結構不重複下注）：不是「沒機會」，而是「單已掛出、等成交」
@@ -139,6 +146,7 @@ def main() -> int:
     already_today = any(tr["date"] == signal_date for tr in trades)
     position_note = None
     new_live_trade = None
+    plan_tracked = False
     if res["direction"] != "FLAT":
         tier_label = "試探" if res["tier"] == "scout" else "標準"
         slot_taken = any(tr.get("tier", "standard") == res["tier"] for tr in active)
@@ -159,6 +167,13 @@ def main() -> int:
                     tr["force_exit"] = True
                     position_note = ((position_note + "；") if position_note else "") + \
                         f"高信心反向訊號 → 在途 {tr['direction']} 單將於下一根開盤離場"
+        # 這份計畫是否真的被系統追蹤（有建單＝有停損管理、有復盤、有成交/結案推播）。
+        # 訊號成立但因倉位佔用而未建單時，畫面必須明說「僅供參考」——否則等於叫使用者
+        # 去掛一張系統根本不會管的單。
+        plan_tracked = any(tr["date"] == signal_date and tr["mode"] == "live" for tr in trades)
+        if not plan_tracked:
+            position_note = ((position_note + "；") if position_note else "") + \
+                "本計畫僅供參考：系統未建單追蹤（無停損管理、無成交與結案推播）"
 
     # ---------------- 迭代優化 ----------------
     tune_logs = OPT.maybe_tune(state, trades, factor_history, D, now_ms())
@@ -235,11 +250,11 @@ def main() -> int:
                   "oi": (float(D["oi"].iloc[t]) if not np.isnan(D["oi"].iloc[t]) else None)},
         "signal": {"direction": res["direction"], "score": sig["score"],
                    "tier": res.get("tier"),
-                   "headline": make_headline(res),
+                   "headline": make_headline(res, plan_tracked),
                    "confidence": sig["confidence"], "agree": sig["agree"],
                    "factors": [{**f, "weight": state["weights"].get(f["name"], 1.0)} for f in sig["factors"]],
                    "gates": res["gates"], "watch": res["watch"], "plan": plan,
-                   "position_note": position_note,
+                   "position_note": position_note, "plan_tracked": plan_tracked,
                    "macro": res["macro"]},
         "levels": sorted(sig["clusters"], key=lambda x: -x["strength"])[:14],
         "wicks": sig["wicks"][-8:],
