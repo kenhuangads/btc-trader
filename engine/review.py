@@ -20,7 +20,8 @@ FEE_MAKER, FEE_TAKER, SLIP = 0.0002, 0.00055, 0.0003
 MAKER_EXITS = {"tp1", "tp2"}  # 限價止盈單以 maker 費率成交
 
 # 出場時停損來源 → 出場原因代碼
-_STOP_REASON = {"init": "stop", "ratchet": "protect_stop", "be": "be_stop", "trail": "trail_stop"}
+_STOP_REASON = {"init": "stop", "ratchet": "protect_stop", "be": "be_stop",
+                "trail": "trail_stop", "profit": "profit_stop"}
 
 
 def new_trade(plan: dict, sig: dict, mode: str) -> dict:
@@ -188,6 +189,13 @@ def process_trade(tr: dict, bars, atr_by_day: dict, params: dict,
                     cand = c - sgn * params["trail_atr_mult"] * a
                     tr["trail"] = cand if tr["trail"] is None else (max(tr["trail"], cand) if sgn == 1 else min(tr["trail"], cand))
                     _raise_stop(tr, sgn, tr["trail"], "trail")
+
+        # 利潤棘輪：TP1 後把「已到手的浮盈」鎖住一部分，只讓出固定 R 的回吐。
+        # 吊燈以 ATR 計價，dist 被 clip 在 stop_max_atr 時吊燈常寬於 1R → 實際只有保本在管事，
+        # 高 MFE 的單仍以保本收場。本棘輪以 R 計價、每根 bar 更新，直接封住回吐上限。
+        pr = params.get("profit_ratchet_r")
+        if pr and tr["tp_done"][0] and tr["mfe_r"] > pr:
+            _raise_stop(tr, sgn, avg + sgn * (tr["mfe_r"] - pr) * dist, "profit")
 
         # 資金費率：每完成一個 UTC 日，按持倉比例入帳（費率為當日末筆 8h 費率 ×3 的近似）
         if funding_by_day and _remaining(tr) > 0:

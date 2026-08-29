@@ -28,8 +28,9 @@ DEFAULT_STATE = {
         "trail_atr_mult": 2.5,
         "tp1_r": 0.7,               # TP1 距離（R 倍數）：對齊 7 日 MFE 分布 65-70 百分位；TP2 = TP1 + 1R
         "trail_after": "tp1",       # 吊燈移動停損啟動點：tp1（預設）或 tp2
-        "ratchet_mfe_r": 0.6,       # 浮盈曾達此 R 數 → 觸發鎖利棘輪
+        "ratchet_mfe_r": 0.6,       # 浮盈曾達此 R 數 → 觸發鎖利棘輪（TP1 前，防浮盈變全虧）
         "ratchet_lock_r": 0.25,     # 棘輪觸發後，停損上移到 -此 R 數
+        "profit_ratchet_r": 0.6,    # 利潤棘輪（TP1 後）：停損跟著 MFE 爬，最多讓出此 R 數的回吐
         "stagnation_days": 5,       # 進場滿 N 天無進展 → 停滯出場
         "stagnation_mfe_r": 0.35,   # 「無進展」定義：MFE 從未達此 R 數
         "risk_pct_base": 1.0,

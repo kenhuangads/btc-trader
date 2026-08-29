@@ -153,7 +153,11 @@ def build_plan(direction: str, D, t: int, sig: dict, state: dict,
                 tps[1].update({"price": price_rnd(_front(c["price"])), "r": round(r_new, 2),
                                "action": "再平 30%（主級別前緣先行入袋），餘倉讓利潤奔跑"})
             break
-    trail_txt = f"餘倉 40% 以 {p['trail_atr_mult']:.1f}×ATR 吊燈式移動停損讓利潤奔跑（TP1 後啟動）"
+    pr = p.get("profit_ratchet_r")
+    trail_txt = (f"餘倉 40%：TP1 後停損移保本，浮盈再增加時「最多只讓出 {pr:g}R 回吐」"
+                 f"（利潤棘輪，逐根 K 更新）；另有 {p['trail_atr_mult']:.1f}×ATR 吊燈為輔"
+                 if pr else
+                 f"餘倉 40% 以 {p['trail_atr_mult']:.1f}×ATR 吊燈式移動停損讓利潤奔跑（TP1 後啟動）")
     targets = []
     if direction == "LONG":
         res = [c for c in clusters if c["price"] > avg_entry and c["strength"] >= 2][:3]
