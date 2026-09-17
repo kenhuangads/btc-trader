@@ -37,9 +37,11 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
     # 二級訊號：標準單（全額風險）／試探單（半額風險，低成本試錯）
     sc = sig["score"]
     scout_th = p.get("scout_threshold", 13)
-    if abs(sc) >= p["score_threshold"]:
+    # 做空門檻可加嚴（short_threshold_add）：BTC 長期偏多，回測+實盤空單期望值皆明顯較弱
+    add = p.get("short_threshold_add", 0) if sc < 0 else 0
+    if abs(sc) >= p["score_threshold"] + add:
         tier = "standard"
-    elif p.get("scout_enabled", True) and abs(sc) >= scout_th:
+    elif p.get("scout_enabled", True) and abs(sc) >= scout_th + add:
         tier = "scout"
         gates.append(f"分數 {sc:+.0f} 達試探門檻 ±{scout_th}（未達標準 ±{p['score_threshold']:.0f}）"
                      f"→ 以試探單出手，風險減半")
@@ -55,7 +57,7 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
         if direction == "LONG" and td <= -55 and sq < 40:
             direction = "FLAT"
             gates.append("日線強勢空頭中不逆勢做多（軋空條件未成形）")
-        if direction == "SHORT" and td >= 55 and sq > -40:
+        if direction == "SHORT" and td >= p.get("short_ct_gate", 55) and sq > -40:
             direction = "FLAT"
             gates.append("日線強勢多頭中不逆勢做空（殺多條件未成形）")
 
@@ -95,6 +97,8 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
                     r = min(p["risk_pct_base"] * 1.3, 2.0)
                 elif conf < 62:
                     r = p["risk_pct_base"] * 0.7
+            if direction == "SHORT":
+                r *= p.get("short_risk_mult", 1.0)
             return round(r * risk_mult * gov, 2)
 
         risk = _risk_for(sig["confidence"])

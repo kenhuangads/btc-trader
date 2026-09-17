@@ -31,6 +31,9 @@ DEFAULT_STATE = {
         "ratchet_mfe_r": 0.6,       # 浮盈曾達此 R 數 → 觸發鎖利棘輪（TP1 前，防浮盈變全虧）
         "ratchet_lock_r": 0.25,     # 棘輪觸發後，停損上移到 -此 R 數
         "profit_ratchet_r": 0.6,    # 利潤棘輪（TP1 後）：停損跟著 MFE 爬，最多讓出此 R 數的回吐
+        "short_threshold_add": 0,   # 做空門檻加嚴（9/17 消融：+4/+8 皆劣化，維持 0）
+        "short_ct_gate": 55,        # 做空逆勢閘門 trend_daily 門檻（9/17 消融：40/30 無差異）
+        "short_risk_mult": 1.0,     # 做空風險倍率（9/17 消融：回測空單 +3.19R，降風險反而少賺）
         "stagnation_days": 5,       # 進場滿 N 天無進展 → 停滯出場
         "stagnation_mfe_r": 0.35,   # 「無進展」定義：MFE 從未達此 R 數
         "risk_pct_base": 1.0,
