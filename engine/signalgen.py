@@ -50,6 +50,18 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
     else:
         gates.append(f"綜合分數 {sc:+.0f} 未達試探門檻 ±{scout_th}（標準 ±{p['score_threshold']:.0f}）→ 觀望")
 
+    # 單邊急行情閘門：近 N 日效率比（|淨變動|/路徑長）過高 → 回檔掛單策略的訊號反而逆向
+    # （732 日研究：er7 >0.47 時同向 5 日命中率僅 44%、每訊號 -0.03R；低於 0.21 時 56%、+0.10R）
+    er_gate = p.get("er_gate")
+    if direction != "FLAT" and er_gate:
+        n = p.get("er_window", 7)
+        seg = D["close"].iloc[t - n:t + 1].to_numpy()
+        er = abs(seg[-1] - seg[0]) / max(float(abs(seg[1:] - seg[:-1]).sum()), 1e-9)
+        sig["er"] = round(float(er), 2)
+        if er > er_gate:
+            direction = "FLAT"
+            gates.append(f"近 {n} 日效率比 {er:.2f} > {er_gate}（單邊急行情）→ 回檔掛單易接在反轉點，觀望等整理")
+
     # 逆勢保護：強勢單邊行情中不逆勢接刀（除非軋空/殺多醞釀分數夠強）
     if direction != "FLAT":
         td = next((f["score"] for f in sig["factors"] if f["name"] == "trend_daily"), 0)

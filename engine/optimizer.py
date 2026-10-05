@@ -34,6 +34,8 @@ DEFAULT_STATE = {
         "short_threshold_add": 0,   # 做空門檻加嚴（9/17 消融：+4/+8 皆劣化，維持 0）
         "short_ct_gate": 55,        # 做空逆勢閘門 trend_daily 門檻（9/17 消融：40/30 無差異）
         "short_risk_mult": 1.0,     # 做空風險倍率（9/17 消融：回測空單 +3.19R，降風險反而少賺）
+        "er_gate": 0.50,            # 單邊急行情閘門：近 er_window 日效率比 > 此值不出手（10/5 研究：>0.47 時命中率 44%）
+        "er_window": 7,             # 效率比視窗（5/10 日消融皆劣於 7）
         "stagnation_days": 5,       # 進場滿 N 天無進展 → 停滯出場
         "stagnation_mfe_r": 0.35,   # 「無進展」定義：MFE 從未達此 R 數
         "risk_pct_base": 1.0,
