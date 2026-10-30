@@ -126,3 +126,36 @@ def cluster_levels(raw: list[dict], tol_frac: float = 0.006, max_span: float | N
         srcs = sorted({x["src"] for x in c})
         out.append({"price": price, "strength": len(c), "srcs": srcs})
     return out
+
+
+def struct_break_4h(h4, k: int = 3, fresh_bars: int = 6, eq_tol: float = 0.015) -> tuple[int, str | None]:
+    """4H 結構突破（CHoCH / W 底 / M 頂）：回傳 (方向 +1/-1/0, 型態)。
+    僅用已確認樞紐（confirm ≤ 最後一根）；突破須在最近 fresh_bars 根內，避免舊突破反覆觸發。
+    研究（730 日）：單獨 IC≈0；僅盤整（er7<0.21）有 1–5 日優勢（3d 60%/5d 59%）。"""
+    if h4 is None or len(h4) < 40:
+        return 0, None
+    w = h4.tail(160).reset_index(drop=True)
+    n = len(w)
+    piv = [p for p in pivots(w, k) if p["confirm"] <= n - 1]
+    H = [p for p in piv if p["kind"] == "H"]; L = [p for p in piv if p["kind"] == "L"]
+    if len(H) < 2 or len(L) < 2:
+        return 0, None
+    c = w["close"].to_numpy()
+    lastH, prevH, lastL, prevL = H[-1], H[-2], L[-1], L[-2]
+    down = lastH["price"] < prevH["price"] and lastL["price"] < prevL["price"]
+    wbot = abs(lastL["price"] - prevL["price"]) / prevL["price"] < eq_tol and lastL["i"] > prevL["i"]
+    if down or wbot:
+        neck = lastH["price"] if down else max((p["price"] for p in H if prevL["i"] < p["i"] < lastL["i"]), default=None)
+        if neck is not None:
+            for i in range(max(lastH["i"], lastL["i"]) + 1, n):
+                if c[i] > neck:
+                    return (1, "w" if wbot and not down else "choch") if i >= n - fresh_bars else (0, None)
+    up = lastH["price"] > prevH["price"] and lastL["price"] > prevL["price"]
+    mtop = abs(lastH["price"] - prevH["price"]) / prevH["price"] < eq_tol and lastH["i"] > prevH["i"]
+    if up or mtop:
+        neck = lastL["price"] if up else min((p["price"] for p in L if prevH["i"] < p["i"] < lastH["i"]), default=None)
+        if neck is not None:
+            for i in range(max(lastH["i"], lastL["i"]) + 1, n):
+                if c[i] < neck:
+                    return (-1, "m" if mtop and not up else "choch") if i >= n - fresh_bars else (0, None)
+    return 0, None

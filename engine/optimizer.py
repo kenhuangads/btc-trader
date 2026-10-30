@@ -36,6 +36,8 @@ DEFAULT_STATE = {
         "short_risk_mult": 1.0,     # 做空風險倍率（9/17 消融：回測空單 +3.19R，降風險反而少賺）
         "er_gate": 0.50,            # 單邊急行情閘門：近 er_window 日效率比 > 此值不出手（10/5 研究：>0.47 時命中率 44%）
         "er_window": 7,             # 效率比視窗（5/10 日消融皆劣於 7）
+        "struct_4h_mode": "all",    # 4H 結構突破因子模式：all / chop（僅盤整啟用）；權重 struct_4h=0 時不參與
+        "struct_gate": False,       # 4H 反向結構突破 → 觀望（實驗閘門）
         "stagnation_days": 5,       # 進場滿 N 天無進展 → 停滯出場
         "stagnation_mfe_r": 0.35,   # 「無進展」定義：MFE 從未達此 R 數
         "risk_pct_base": 1.0,
@@ -60,7 +62,7 @@ DEFAULT_STATE = {
     },
     "weights": {"trend_daily": 1.0, "trend_4h": 0.8, "momentum": 0.7, "funding": 0.9,
                 "oi_price": 0.9, "taker_flow": 0.6, "rvol": 0.5, "wick_magnet": 0.5,
-                "levels": 0.6, "squeeze_setup": 0.7},
+                "levels": 0.6, "squeeze_setup": 0.7, "struct_4h": 0.0},
     "history": [],
 }
 

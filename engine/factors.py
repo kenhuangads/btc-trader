@@ -288,6 +288,20 @@ def f_squeeze(D, t):
     return _f("squeeze_setup", "軋空/殺多醞釀", s, txt)
 
 
+def f_struct_4h(h4, D, t, mode="all"):
+    """4H 結構突破：CHoCH/W 底 → +40，M 頂/跌破 → -40。mode="chop" 時僅在 7 日效率比 <0.21 啟用。"""
+    d, kind = ind.struct_break_4h(h4)
+    if d == 0:
+        return _f("struct_4h", "4H結構突破", 0, "近 1 日無 4H 結構突破")
+    if mode == "chop" and t >= 7:
+        seg = D["close"].iloc[t - 7:t + 1].to_numpy()
+        er = abs(seg[-1] - seg[0]) / max(float(abs(seg[1:] - seg[:-1]).sum()), 1e-9)
+        if er >= 0.21:
+            return _f("struct_4h", "4H結構突破", 0, f"有 4H {kind} 突破但效率比 {er:.2f} 非盤整，不計")
+    txt = {"choch": "結構轉換（突破最後一個反向樞紐）", "w": "W 底頸線突破", "m": "M 頂頸線跌破"}[kind]
+    return _f("struct_4h", "4H結構突破", 40 * d, f"4H {txt}（早期反轉訊號）")
+
+
 # ---------------------------------------------------------------- 價位群建構
 def build_clusters(D, t, wicks, span_atr: float | None = 0.45) -> list[dict]:
     c = float(D["close"].iloc[t])
@@ -321,7 +335,8 @@ FACTOR_FNS = ["trend_daily", "trend_4h", "momentum", "funding", "oi_price",
               "taker_flow", "rvol", "wick_magnet", "levels", "squeeze_setup"]
 
 
-def compute_signal(D, t, weights: dict, h4=None, cluster_span_atr: float | None = 0.45) -> dict:
+def compute_signal(D, t, weights: dict, h4=None, cluster_span_atr: float | None = 0.45,
+                   struct_mode: str = "all") -> dict:
     wicks = ind.find_wicks(D, D["atr"], t)
     # 粗群（無跨度上限）：因子評分／掛單吸附／rr 檢查沿用——因子權重與閘門在此行為上校準，
     # 消融證實改成細群會劣化整體出手集合。細群（跨度 ≤ cluster_span_atr）只供止盈擋牆定位。
@@ -339,6 +354,8 @@ def compute_signal(D, t, weights: dict, h4=None, cluster_span_atr: float | None 
         f_levels(D, t, clusters),
         f_squeeze(D, t),
     ]
+    if weights.get("struct_4h", 0) > 0:  # 權重 0 ＝ 完全不參與（含共識度計算）
+        facs.append(f_struct_4h(h4, D, t, struct_mode))
     ok = [f for f in facs if f["ok"]]
     wsum = sum(weights.get(f["name"], 1.0) for f in ok) or 1.0
     score = sum(f["score"] * weights.get(f["name"], 1.0) for f in ok) / wsum

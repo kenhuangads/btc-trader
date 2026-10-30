@@ -30,7 +30,8 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
         if len(h4) < 80:
             h4 = None
     sig = F.compute_signal(D, t, state["weights"], h4=h4,
-                           cluster_span_atr=p.get("cluster_span_atr", 0.45))
+                           cluster_span_atr=p.get("cluster_span_atr", 0.45),
+                           struct_mode=p.get("struct_4h_mode", "all"))
     macro = macro_gate(ts_signal)
     gates, direction, tier = [], "FLAT", None
 
@@ -61,6 +62,14 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
         if er > er_gate:
             direction = "FLAT"
             gates.append(f"近 {n} 日效率比 {er:.2f} > {er_gate}（單邊急行情）→ 回檔掛單易接在反轉點，觀望等整理")
+
+    # 4H 結構逆向閘門（實驗）：近 1 日出現與訊號相反的 4H 結構突破 → 觀望
+    if direction != "FLAT" and p.get("struct_gate") and h4 is not None:
+        from .indicators import struct_break_4h
+        d4, kind4 = struct_break_4h(h4)
+        if d4 != 0 and ((direction == "LONG") != (d4 > 0)):
+            direction = "FLAT"
+            gates.append(f"4H 出現反向結構突破（{kind4}）→ 早期反轉跡象，觀望")
 
     # 逆勢保護：強勢單邊行情中不逆勢接刀（除非軋空/殺多醞釀分數夠強）
     if direction != "FLAT":
