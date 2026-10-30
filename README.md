@@ -93,6 +93,10 @@ Actions secret `NTFY_TOPIC`，屬私密資訊勿外流——知道主題名就�
 **替代方案（Telegram）**：建立 Bot 取得 token 與你的 chat_id，設為 repo secrets
 `TELEGRAM_BOT_TOKEN` 與 `TELEGRAM_CHAT_ID`，下一輪起生效（兩通道可並用）。
 
+## 外部方法論校驗（2026-10）
+
+對「大漂亮的K线日记」60 支影片做客觀對照：她 7 日方向命中 47%（≈永遠多基準）、目標位觸及 25%、劇本幾乎不講停損；唯一勝過引擎的是 V 型反轉早期辨識。工具測試：破敗訊號（1H 掃破後 3 根內收回）多方有溫和優勢 → 已納入盤中提醒；黃金口袋 Fib、假突破/假跌破、ETF 日流量 → 無預測力，否決（詳見系統頁優化日誌）。
+
 ## 常見操作
 
 - **手動觸發更新**：GitHub → Actions → daily-update → Run workflow（可勾 bootstrap 重建）
