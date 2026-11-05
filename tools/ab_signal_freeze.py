@@ -17,6 +17,7 @@
   python -m tools.market_snapshot save      # 先 pin 住輸入
   python -m tools.ab_signal_freeze          # 跑 A/B（約 2 分鐘）
   python -m tools.ab_signal_freeze --snapshot other.pkl --json out.json
+  python -m tools.ab_signal_freeze --snapshot other.pkl --daily-bars 979   # 與另一份快照對齊訊號日
 """
 import copy
 import json
@@ -101,6 +102,11 @@ def main() -> int:
             del argv[i:i + 2]
 
     m = load(snap)
+    if "--daily-bars" in argv:        # 對齊視窗：不同交易所對「980 根」回的根數不同（OKX 實測 999）
+        i = argv.index("--daily-bars")
+        m = dict(m)
+        m["d"] = m["d"].iloc[-int(argv[i + 1]):].reset_index(drop=True)
+        del argv[i:i + 2]
     D, h4 = master(m), m["h4"]
     live = jload(STATE / "model_state.json") or copy.deepcopy(OPT.DEFAULT_STATE)
     base = {"version": live["version"], "params": copy.deepcopy(live["params"]),

@@ -68,7 +68,7 @@ GitHub Actions（每 4 小時：00:07 / 04:07 / … UTC）
   → 產出 docs/data/*.json 並 commit → GitHub Pages 靜態儀表板（PWA）
 ```
 
-- `state/signal_lock.json` 當日訊號鎖：訊號的事實基礎是**已收盤的日 K**，同一個訊號日只定案一次，盤中重跑不得改寫方向／tier／計畫（739 日 walk-forward A/B：不鎖時有 3.8% 的日子會盤中翻動，總 R +2.85 → +5.11、獲利因子 1.22 → 1.56）
+- `state/signal_lock.json` 當日訊號鎖：訊號的事實基礎是**已收盤的日 K**，同一個訊號日只定案一次，盤中重跑不得改寫方向／tier／計畫（739 日 walk-forward A/B，三個 K 線來源各跑一次：不鎖時 1.1～1.8% 的日子會盤中翻動；凍結後出手少 9～15 筆、每訊號期望值與最大回撤三個來源皆持平或改善，總 R 差異 −0.6～+0.7 落在抓取抖動範圍內——這道鎖的價值在一致性，不在績效）
 - `state/` 模型權重、參數、全部交易紀錄（可審計）；`history/` 逐日累積衍生品數據，倉庫本身就是資料庫
 - 前端零框架、零建置（`docs/`），支援深/淺色、離線快取、iOS/Android 加入主畫面
 
@@ -90,6 +90,8 @@ python -m http.server 8123 -d docs           # http://localhost:8123 預覽
 
 ```bash
 python -m tools.market_snapshot save         # 抓一次市場資料存成快照（.cache/，已 gitignore）
+python -m tools.ab_ablation --workers 8      # 逐項退回優化日誌裡的每個決定，量「拿掉它會少多少」
+python -m tools.ab_ablation --compare a.json b.json c.json   # 多份快照（不同 K 線來源）的 Δ 對照
 python -m tools.ab_signal_freeze             # 全歷史 walk-forward A/B：每輪決策 vs 訊號凍結
 python -m tools.pinned_run [--bootstrap]     # 用快照跑 production run_daily（parity／回歸測試）
 ```
@@ -97,6 +99,14 @@ python -m tools.pinned_run [--bootstrap]     # 用快照跑 production run_daily
 `pinned_run` 會就地覆寫 `state/` 與 `docs/data/`，因此在有 `.git` 的目錄會直接拒絕執行；
 請先把 `engine state history docs tools` 複製成沙箱再跑。A/B 腳本會輸出逐年拆解與
 「差異來自哪幾筆單」，用來判斷改善是分散的還是被一兩筆撐起來的。
+
+**抓取抖動有多大（2026-11 實測）**：同一份程式碼、同一組參數、同一段 739 個訊號日，只把 K 線來源換成
+Binance／OKX／Bybit（同一根日 K 收盤只差幾美元），walk-forward 總 R 就是 5.5／0.9／1.9R、獲利因子 1.78／1.11／1.23，
+11～12% 的訊號日決策不同、只有約 40/70 筆單相同。因此**單次抓取上 <1R 的 A/B 差異不能當證據**；
+上線標準改為：三個來源的快照各跑一次（`--daily-bars` 對齊訊號日），Δ 必須同號且量級高於各來源 Δ 的全距。
+消融結果：效率比閘門、同結構閘門、rr_floor 否決、TP2 結構對齊在三個來源上同號；機率導向掛單梯、停損緩衝 0.5、
+TP1 擋牆的日誌數字則落在抖動範圍內（無法判定、未撤回）。`ab_ablation --touch static --base default` 的產出與
+`pinned_run --bootstrap` 逐筆相同，是 harness 口徑等於 production 的 parity 證明。
 
 ## 手機推播通知
 
@@ -117,7 +127,8 @@ Actions secret `NTFY_TOPIC`，屬私密資訊勿外流——知道主題名就�
 
 ## 常見操作
 
-- **手動觸發更新**：GitHub → Actions → daily-update → Run workflow（可勾 bootstrap 重建）
+- **手動觸發更新**：GitHub → Actions → daily-update → Run workflow（盤中修好程式後要重新定案今日訊號請勾 refresh_signal）
+- ⚠️ **bootstrap 僅供首次部署**：它會把 `state/` 重設為程式內建的預設參數（不含上線後調過的閘門與緩衝），並以回測結果**取代全部實盤紀錄與優化日誌**；已上線的環境不要勾
 - **調整風險偏好**：改 `state/model_state.json` 的 `risk_pct_base`（或等優化器自調）
 - **資料時區**：所有日期以 UTC 日 K 為準；儀表板顯示台北時間
 

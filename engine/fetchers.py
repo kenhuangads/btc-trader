@@ -104,6 +104,9 @@ def okx_klines(bar: str, interval_ms: int, bars: int) -> pd.DataFrame:
         rows = _okx("/api/v5/market/history-candles",
                     {"instId": inst, "bar": bar, "limit": 100, "after": oldest})
         out += rows
+    # 分頁是 300 + N×100，湊到 ≥bars 才停：截回 bars 根（最新優先），讓三個來源回同樣多的日 K
+    # （否則 CI 的 OKX 樣本比本機 Binance 多 20 個訊號日，walk-forward 回測與 A/B 無法對齊）
+    out = out[:bars]
     # 僅保留已確認 K 棒（confirm 欄位為最後一欄 "1"）
     keep = [[r[0], r[1], r[2], r[3], r[4], r[6]] for r in out if r[-1] == "1"]
     return _df(keep, ["ts", "open", "high", "low", "close", "volume"])
