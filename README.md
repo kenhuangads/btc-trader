@@ -92,6 +92,7 @@ python -m http.server 8123 -d docs           # http://localhost:8123 預覽
 python -m tools.market_snapshot save         # 抓一次市場資料存成快照（.cache/，已 gitignore）
 python -m tools.ab_ablation --workers 8      # 逐項退回優化日誌裡的每個決定，量「拿掉它會少多少」
 python -m tools.ab_ablation --compare a.json b.json c.json   # 多份快照（不同 K 線來源）的 Δ 對照
+python -m tools.ab_ablation --replay 4h --grid intrabar --daily-bars 979 --workers 8   # 棒內／效期類參數：4H 重播網格（--compare 自動套上線標準）
 python -m tools.ab_signal_freeze             # 全歷史 walk-forward A/B：每輪決策 vs 訊號凍結
 python -m tools.pinned_run [--bootstrap]     # 用快照跑 production run_daily（parity／回歸測試）
 ```
@@ -107,6 +108,15 @@ Binance／OKX／Bybit（同一根日 K 收盤只差幾美元），walk-forward �
 消融結果：效率比閘門、同結構閘門、rr_floor 否決、TP2 結構對齊在三個來源上同號；機率導向掛單梯、停損緩衝 0.5、
 TP1 擋牆的日誌數字則落在抖動範圍內（無法判定、未撤回）。`ab_ablation --touch static --base default` 的產出與
 `pinned_run --bootstrap` 逐筆相同，是 harness 口徑等於 production 的 parity 證明。
+
+**棒內參數只認 4H 重播（2026-11-05 重驗）**：`ab_ablation --replay 4h` 把在途單改成 4H K 重播（每天 6 輪、只在第一輪決策，
+與 `ab_signal_freeze` 同一迴圈，V0 與其 frozen 欄位逐項相同），`--grid intrabar` 是利潤棘輪 {關／0.45／0.6／0.8}、
+掛單效期 {48／60／72／96h}、4H 反向結構閘門 {關／開} 的網格。日 K 回放對這三項給的方向（棘輪關閉 +0.4～+0.6R、
+效期 72h +0.5～+2.2R、結構閘門 +0.5～+1.0R，三來源同號）在 4H 重播下全部站不住：棘輪關閉 +1.5／+0.4／+0.8R 同號但量級
+不過全距（增益集中在 1～3 筆大行情單）；效期 72h +1.4／+0.7／−0.9R 正負翻動、OKX／Bybit 的 DD 惡化 0.9～1.1R，
+第 49～72 小時才成交的 8 筆單合計 0R（逾時成交零期望值；正 Δ 全來自已成交單逾時補深檔、負 Δ 來自掛單佔位擋掉後面的贏單）；
+結構閘門 +1.0／+0.1／−0.1R，直接濾掉的結案單只有 2～3 筆。三項維持現狀、留痕於優化日誌（v15）。
+日 K 甚至分不出 60h 與 72h 效期（兩者結果完全相同）——棘輪、吊燈、效期、停滯、TP 結構這類參數的 A/B 一律用 `--replay 4h`。
 
 ## 手機推播通知
 
