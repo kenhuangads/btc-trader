@@ -8,8 +8,9 @@
 
 回放口徑與首次部署的 walk-forward 回測相同（日 K、同棒先進場後停損、雙軌倉位、強反向訊號提前離場）。
 觸價表預設「每週滾動重算、只看過去」（= 實盤每週日再校準的路徑，零未來資訊）；
---touch static 則與 run_daily --bootstrap 完全一致（整段資料一張表），搭配 --base default
-可與 tools.pinned_run --bootstrap 的產出逐筆對帳（parity）。
+--touch static 則與 run_daily --reset-all（首次部署式全重置 bootstrap）完全一致（整段資料一張表），
+搭配 --base default 可與 tools.pinned_run --reset-all 的產出逐筆對帳（parity）。
+保留模式的 --bootstrap 用的是現行 state 的參數／權重與**現行觸價表**，且只留上線日之前的單，不是對帳對象。
 
 用法：
   python -m tools.market_snapshot save                                   # 先 pin 住輸入

@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       bootstrap:
-        description: "強制重跑回測（重建統計與權重；一併重新定案今日訊號）"
+        description: "重建回測基準（保留模式）：用現行參數／權重重跑回測，只換掉 mode=backtest 的單與上線前的因子紀錄；參數、權重、優化日誌、實盤單、今日訊號鎖全部保留。首次部署式的全重置（state 回預設、回測取代全部紀錄）這裡不提供，請在本機用 --reset-all"
         type: boolean
         default: false
       refresh_signal:

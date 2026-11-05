@@ -10,7 +10,10 @@
 
 用法：
   python -m engine.run_daily                   # 每 4h 更新（首次自動回測建立基準）
-  python -m engine.run_daily --bootstrap       # 強制重跑回測（重建統計與權重，並重新定案今日訊號）
+  python -m engine.run_daily --bootstrap       # 重建回測基準：只換掉回測單與上線前的因子紀錄，
+                                               #   參數／權重／優化日誌／實盤單／訊號鎖全部保留
+  python -m engine.run_daily --reset-all       # 首次部署的全重置：state 回到預設、回測結果取代全部紀錄
+                                               #   （會抹掉上線後累積的一切，daily.yml 不暴露）
   python -m engine.run_daily --refresh-signal  # 解鎖今日訊號重新定案（僅供盤中修好程式後手動補跑）
 """
 import copy
@@ -99,7 +102,8 @@ def make_headline(res: dict, plan_tracked: bool = True) -> str:
 
 
 def main() -> int:
-    bootstrap_flag = "--bootstrap" in sys.argv
+    reset_flag = "--reset-all" in sys.argv
+    bootstrap_flag = "--bootstrap" in sys.argv or reset_flag
     refresh_flag = "--refresh-signal" in sys.argv
     state = jload(STATE / "model_state.json") or copy.deepcopy(OPT.DEFAULT_STATE)
     OPT.ensure_defaults(state)
@@ -134,15 +138,50 @@ def main() -> int:
     funding_by_day = {int(ts): float(f) for ts, f in zip(D["ts"], D["funding"])
                       if not np.isnan(f)}
 
-    # ---------------- 首次啟動：回測建立基準 ----------------
+    # ---------------- 回測基準：首次啟動自動建立；--bootstrap 重建 ----------------
+    # 兩種語意，看 state 裡有沒有上線後累積的紀錄（優化日誌或實盤單）：
+    #   · 保留模式（已上線的環境；daily.yml 的 bootstrap 勾選框走這裡）：只重建「回測基準」——
+    #     mode=backtest 的單與上線日之前的因子紀錄，換成用**現行**參數／權重重跑的結果；參數、權重、
+    #     優化日誌、version、實盤單（含 pending/open）、訊號鎖、推播紀錄全部原樣。回測只留上線日
+    #     （第一個封存訊號日或第一筆實盤單，取較早者）之前的單：trade id 不含 mode，實盤期間若同時
+    #     存在回測單會撞 id，統計與權益曲線也會把同一段行情算兩次。
+    #   · 全重置（--reset-all；首次部署、state 裡沒有任何上線紀錄時自動）：state 換成 DEFAULT_STATE、
+    #     回測結果取代全部交易紀錄、強制調參初始化權重。這會抹掉上線後累積的一切，所以 daily.yml
+    #     不暴露它；tools.ab_ablation --touch static --base default 的 parity 對帳對的也是這條路徑。
     need_bootstrap = bootstrap_flag or (not trades and not factor_history)
-    if need_bootstrap:
-        log("啟動回測 bootstrap …")
+    has_record = bool(state.get("history")) or any(tr["mode"] == "live" for tr in trades)
+    reset_all = reset_flag or (need_bootstrap and not has_record)
+    if need_bootstrap and reset_all:
+        log("啟動回測 bootstrap（全重置：state 回到預設、回測結果取代全部交易紀錄）…")
         state = copy.deepcopy(OPT.DEFAULT_STATE)
         touch = OPT.touch_prob_table(D, lookback=state["params"].get("touch_lookback", 700))
         trades, factor_history = BT.run_backtest(D, state, touch, h4=m["h4"],
                                                  funding_by_day=funding_by_day)
         OPT.maybe_tune(state, trades, factor_history, D, now_ms(), force=True)
+    elif need_bootstrap:
+        kept = [tr for tr in trades if tr["mode"] != "backtest"]
+        archive_idx = jload(DATA / "archive" / "index.json") or []
+        live_since = min([tr["date"] for tr in kept] + list(archive_idx), default=None)
+        log(f"state 已有 {len(state.get('history') or [])} 筆優化日誌、{len(kept)} 筆實盤單 → bootstrap 走保留模式："
+            f"只重建回測基準（{'上線日 ' + live_since + ' 之前' if live_since else '全段'}），"
+            f"參數／權重／日誌／實盤單／訊號鎖不動；要首次部署式的全重置請改用 --reset-all")
+        lb = state["params"].get("touch_lookback", 700)
+        if touch.get("lookback") != lb:      # 沿用現行觸價表（每週日本來就會重算），缺了才補
+            touch = OPT.touch_prob_table(D, lookback=lb)
+        bt_trades, bt_fh = BT.run_backtest(D, state, touch, h4=m["h4"], funding_by_day=funding_by_day)
+        if live_since:
+            bt_trades = [tr for tr in bt_trades if tr["date"] < live_since]
+            bt_fh = ([fh for fh in bt_fh if fh["date"] < live_since]
+                     + [fh for fh in factor_history if fh["date"] >= live_since])
+        # 「上次調參時的結案數」隨回測單數量平移：實盤累積的結案進度不變，回測單換批也不會觸發調參
+        old_done = sum(1 for tr in trades if tr["mode"] == "backtest" and tr["status"] in ("closed", "cancelled"))
+        new_done = sum(1 for tr in bt_trades if tr["status"] in ("closed", "cancelled"))
+        state["closed_at_last_tune"] = max(0, int(state.get("closed_at_last_tune", 0)) + new_done - old_done)
+        n_old_bt = len(trades) - len(kept)
+        trades = bt_trades + kept
+        factor_history = bt_fh
+        log(f"回測基準已重建：回測單 {n_old_bt} → {len(bt_trades)} 筆、因子紀錄 {len(factor_history)} 筆；"
+            f"實盤單 {len(kept)} 筆原樣保留")
 
     # ---------------- 實盤在途單：以 1h K 精確重播 ----------------
     pre_status = {tr["id"]: tr["status"] for tr in trades}  # 供推播偵測本輪狀態變化
@@ -173,8 +212,10 @@ def main() -> int:
     #      讓 180 日分位跨過門檻 → 分數飄移（7/16 分數 11.5→15.4 跨過試探門檻而翻多）
     #   3) 優化器每輪都可能調權重／參數、觸價曲線每週日重算 → 分數與掛單價飄移（8/13）
     # 凍結後仍每輪更新的：在途單 1h 重播、盤中提醒、統計與復盤、推播、調參（明日生效）。
+    # 保留模式的 bootstrap 也尊重訊號鎖：它只動回測基準，今日決策不是它的事；全重置後鎖裡的
+    # 交易紀錄已不存在，才需要重新定案。
     lock = jload(SIGNAL_LOCK) or {}
-    frozen = bool(not need_bootstrap and not refresh_flag
+    frozen = bool(not reset_all and not refresh_flag
                   and lock.get("signal_date") == signal_date and lock.get("res"))
     if frozen:
         res = lock["res"]
@@ -273,7 +314,9 @@ def main() -> int:
     alerts = AL.build_alerts(D, t, sig, trades, m, now_ms())
 
     # ---------------- 手機推播（ntfy／Telegram；未設定即停用，失敗不影響流程） ----------------
-    if not need_bootstrap:
+    # 保留模式的 bootstrap 照常推播：成交／結案等狀態轉換只在發生的那一輪偵測得到，這輪不推
+    # 下一輪也不會補；全重置後沒有實盤單可言，才整輪不推。
+    if not reset_all:
         try:
             events = []
             if new_live_trade is not None:

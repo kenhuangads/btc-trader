@@ -15,7 +15,7 @@ GitHub Actions 全自動抓取市場數據 → 多因子引擎產生**做多／�
 
 | 目標 | 對應機制 |
 | --- | --- |
-| **大賺小賠** | 單筆風險固定 1~2%；TP1（+0.7R，對齊 7 日行情空間分布的 65-70 百分位）平 30% 並移保本＋啟動 2.5×ATR 移動停損、TP2（+1.7R）再平 30%、餘倉 40% 讓利潤奔跑；**平倉比例按實際成交量等比縮放**（部分成交結構不變形）；結構停損＋ATR 緩衝（寬停損防插針） |
+| **大賺小賠** | 單筆風險固定 1~2%；TP1（+0.7R，對齊 7 日行情空間分布的 65-70 百分位）平 30% 並移保本＋啟動 2.5×ATR 移動停損、TP2（+1.7R）再平 30%、餘倉 40% 讓利潤奔跑；**平倉比例按實際成交量等比縮放**（部分成交結構不變形）；結構停損＋0.5 ATR 緩衝（寬停損防插針；8/13 A/B 由 0.6 收至 0.5，優化器仍可在 0.4~1.1 間自調） |
 | **止盈擋在牆前** | 獲利路徑上若有**仍有效**的強級別（近 2 日未被穿越 ≥0.3 ATR），TP1 提前到級別前緣（≥0.45R 才擋，太近改看下一道）；TP2 對齊最近主級別（強度 ≥3）前緣；擋牆用跨度 ≤0.45 ATR 的細價位群定位，避免相鄰多道牆被串成一個均價無意義的超級群。信心因獲利空間受限而扣分時，風險加碼同步取消 |
 | **浮盈不變虧、死單不戀戰** | 鎖利棘輪（TP1 前）：浮盈曾達 0.6R → 停損自動上移至 −0.25R；停滯出場：進場 5 天 MFE 不足 0.35R 直接離場，資金留給會動的行情 |
 | **到手的利潤不還回去** | 利潤棘輪（TP1 後）：餘倉停損跟著 MFE 往上爬，最多讓出 0.6R 回吐，逐根 K 更新。原本的 2.5×ATR 吊燈換算後中位 1.14R、**100% 寬於保本**，44 筆 TP1 命中無一筆 trail_stop、平均回吐 0.70R——以 R 計價的棘輪才真正封住回吐上限 |
@@ -77,7 +77,8 @@ GitHub Actions（每 4 小時：00:07 / 04:07 / … UTC）
 ```bash
 pip install -r requirements.txt
 python -m engine.run_daily                   # 每 4h 更新（當日第一輪定案，其後沿用）
-python -m engine.run_daily --bootstrap       # 重建回測基準
+python -m engine.run_daily --bootstrap       # 重建回測基準（保留模式：只換回測單與上線前因子紀錄，參數／日誌／實盤單／訊號鎖不動）
+python -m engine.run_daily --reset-all       # 首次部署式全重置（state 回預設、回測取代全部紀錄；已上線的環境不要用）
 python -m engine.run_daily --refresh-signal  # 解除今日訊號鎖重新定案（盤中修好程式後才用）
 python -m http.server 8123 -d docs           # http://localhost:8123 預覽
 ```
@@ -93,7 +94,7 @@ python -m tools.market_snapshot save         # 抓一次市場資料存成快照
 python -m tools.ab_ablation --workers 8      # 逐項退回優化日誌裡的每個決定，量「拿掉它會少多少」
 python -m tools.ab_ablation --compare a.json b.json c.json   # 多份快照（不同 K 線來源）的 Δ 對照
 python -m tools.ab_signal_freeze             # 全歷史 walk-forward A/B：每輪決策 vs 訊號凍結
-python -m tools.pinned_run [--bootstrap]     # 用快照跑 production run_daily（parity／回歸測試）
+python -m tools.pinned_run [--bootstrap|--reset-all]   # 用快照跑 production run_daily（parity／回歸測試）
 ```
 
 `pinned_run` 會就地覆寫 `state/` 與 `docs/data/`，因此在有 `.git` 的目錄會直接拒絕執行；
@@ -106,7 +107,8 @@ Binance／OKX／Bybit（同一根日 K 收盤只差幾美元），walk-forward �
 上線標準改為：三個來源的快照各跑一次（`--daily-bars` 對齊訊號日），Δ 必須同號且量級高於各來源 Δ 的全距。
 消融結果：效率比閘門、同結構閘門、rr_floor 否決、TP2 結構對齊在三個來源上同號；機率導向掛單梯、停損緩衝 0.5、
 TP1 擋牆的日誌數字則落在抖動範圍內（無法判定、未撤回）。`ab_ablation --touch static --base default` 的產出與
-`pinned_run --bootstrap` 逐筆相同，是 harness 口徑等於 production 的 parity 證明。
+`pinned_run --reset-all`（首次部署式全重置）的回測單逐筆相同，是 harness 口徑等於 production 的 parity 證明；
+`DEFAULT_STATE` 的參數就是現行上線設計（停損緩衝 0.5、同結構閘門 0.35 ATR、方向化冷卻），所以兩者起跑規格一致。
 
 ## 手機推播通知
 
@@ -128,7 +130,8 @@ Actions secret `NTFY_TOPIC`，屬私密資訊勿外流——知道主題名就�
 ## 常見操作
 
 - **手動觸發更新**：GitHub → Actions → daily-update → Run workflow（盤中修好程式後要重新定案今日訊號請勾 refresh_signal）
-- ⚠️ **bootstrap 僅供首次部署**：它會把 `state/` 重設為程式內建的預設參數（不含上線後調過的閘門與緩衝），並以回測結果**取代全部實盤紀錄與優化日誌**；已上線的環境不要勾
+- **重建回測基準（bootstrap）**：Actions 勾 `bootstrap`（或本機 `--bootstrap`）走**保留模式**——用現行參數／權重重跑 walk-forward 回測，只換掉 `mode=backtest` 的單與上線日（第一個封存訊號日）之前的因子紀錄；參數、權重、優化日誌、`version`、實盤單（含在途）、當日訊號鎖、推播紀錄全部原樣，也不會重新定案今日訊號。注意回測樣本是「抓取視窗（980 日）扣掉上線後的日子」，上線越久回測段越短
+- ⚠️ **全重置（`--reset-all`）僅供首次部署**：`state/` 回到程式內建預設、回測結果**取代全部實盤紀錄與優化日誌**並重新定案今日訊號；Actions 不提供這個選項，已上線的環境不要在本機對 repo 執行（要驗證請照上面的沙箱流程）
 - **調整風險偏好**：改 `state/model_state.json` 的 `risk_pct_base`（或等優化器自調）
 - **資料時區**：所有日期以 UTC 日 K 為準；儀表板顯示台北時間
 
