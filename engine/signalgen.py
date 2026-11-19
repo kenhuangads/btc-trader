@@ -169,6 +169,8 @@ def decide(D, t: int, state: dict, trades: list[dict], touch: dict, h4=None) -> 
                              + ("（近壓力空間不足）" if plan["warnings"] else ""))
                 direction, plan, tier = "FLAT", None, None
 
+    if direction == "FLAT":
+        tier = None  # 層級只屬於「有出手」的訊號：被閘門擋成觀望時不得殘留「標準／試探」標記
     watch = P.watch_conditions(sig) if direction == "FLAT" else []
     return {"sig": sig, "direction": direction, "plan": plan, "tier": tier,
             "gates": gates, "macro": macro, "watch": watch, "signal_ts": ts_signal}

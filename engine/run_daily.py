@@ -184,6 +184,8 @@ def main() -> int:
     elif refresh_flag and lock.get("signal_date") == signal_date:
         log(f"--refresh-signal：解除 {signal_date} 的訊號鎖，重新定案")
     sig, plan = res["sig"], res["plan"]
+    if res["direction"] == "FLAT":
+        res["tier"] = None  # 舊版凍結檔可能殘留閘門前的層級標記（僅顯示用，不影響決策）
 
     if not factor_history or factor_history[-1]["ts"] != int(D["ts"].iloc[t]):
         factor_history.append({"date": signal_date, "ts": int(D["ts"].iloc[t]),

@@ -140,7 +140,7 @@ function renderHero() {
   if (S.position_note) notes += `<li class="gate">${esc(S.position_note)}</li>`;
   const P = LATEST.meta.params;
   const floor = S.tier === "scout" ? (P.scout_conf_floor ?? 48) : P.confidence_floor;
-  const tierBadge = S.tier === "scout"
+  const tierBadge = S.direction === "FLAT" ? "" : S.tier === "scout"
     ? `<span class="badge badge-amber">🔍 試探單 · 風險減半</span>`
     : S.tier === "standard" ? `<span class="badge badge-green">⭐ 標準單 · 全額風險</span>` : "";
   $("#hero").className = `card hero ${cls}`;
