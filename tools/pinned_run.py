@@ -11,7 +11,8 @@
 
 用法：
   python -m tools.pinned_run                          # 一般輪
-  python -m tools.pinned_run --bootstrap              # 重建回測基準
+  python -m tools.pinned_run --bootstrap              # 重建回測基準（保留模式：參數／日誌／實盤單／訊號鎖不動）
+  python -m tools.pinned_run --reset-all              # 首次部署式全重置（與 ab_ablation --touch static --base default 對帳用）
   python -m tools.pinned_run --refresh-signal
   python -m tools.pinned_run --snapshot other.pkl     # 指定快照
   python -m tools.pinned_run --no-history-write       # 不讓 derivatives.csv 累積影響下一次

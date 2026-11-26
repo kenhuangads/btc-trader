@@ -5,6 +5,11 @@
 - 停損緩衝：被插針掃損比例 >30% 加寬（0.4~1.1 ATR）
 - 分數門檻：依觀望率與勝率微調（18~32）
 每次變更都寫入優化日誌（何時、改了什麼、為什麼）。
+
+DEFAULT_STATE 的 params 代表「現行上線設計」：經 A/B 驗證並在優化日誌留痕後上線的參數改動
+（如 8/13 停損緩衝 0.5、8/20 同結構閘門 0.35 ATR 與方向化冷卻）要同步回這裡，首次部署
+（--reset-all）與 tools.ab_ablation --base default 才會從同一套規格起跑；weights 維持初始值，
+由優化器依復盤結果自調，不回寫。
 """
 import datetime as dt
 
@@ -22,7 +27,7 @@ DEFAULT_STATE = {
         "touch_lookback": 180,                     # 觸價機率曲線回看天數（180 = 跟隨近期波動結構自動再校準）
         "entry_depth_mult": 1.0,
         "rung_weights": [0.40, 0.35, 0.25],
-        "stop_buffer_atr": 0.6,
+        "stop_buffer_atr": 0.5,     # 結構外停損緩衝（ATR）：8/13 A/B 上線 0.6→0.5（單獨測即全面小勝，與機率導向掛單組合為全域最優）
         "stop_max_atr": 2.2,
         "stop_min_atr": 1.0,
         "trail_atr_mult": 2.5,
@@ -51,9 +56,9 @@ DEFAULT_STATE = {
         "max_hold_days": 7,
         "max_leverage": 5,
         "rr_floor": None,              # 獲利空間下限（R）：到最近強反向級別不足此值 → 不出手（None=停用）
-        "dup_stop_atr": None,          # 同結構重複風險：與在途同向單結構停損相距 < 此 ATR 倍數 → 不重複下注（None=停用）
+        "dup_stop_atr": 0.35,          # 同結構重複風險：與在途同向單結構停損相距 < 此 ATR 倍數 → 不重複下注（None=停用；8/20 上線 0.35）
         "dup_risk_floor": 0.5,         # 在途單剩餘風險低於此 R 數視為已卸險，不再佔用同結構額度
-        "cooling_directional": False,  # 方向化冷卻：連續停損只擋同方向訊號，反向放行
+        "cooling_directional": True,   # 方向化冷卻：連續停損只擋同方向訊號，反向放行（8/20 上線；回測零成本、實盤解開誤鎖）
         "tp_wall": True,               # TP1 擋牆前緣：路徑上第一道仍有效的強級別 → TP1 提前到級別前緣
         "tp_wall_min_r": 0.45,         # 牆前緣不足此 R 數視為太近（噪音可穿），改看下一道牆
         "tp_wall_breach_atr": 0.3,     # 近 2 日被穿越超過此 ATR 倍數的級別視為已失效，不再當牆
